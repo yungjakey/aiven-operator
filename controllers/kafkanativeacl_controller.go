@@ -17,7 +17,7 @@ import (
 //+kubebuilder:rbac:groups=aiven.io,resources=kafkanativeacls/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=aiven.io,resources=kafkanativeacls/finalizers,verbs=get;create;update
 
-// KafkaNativeACLController reconciles a KafkaNativeACL object.
+// KafkaNativeACLController reconciles a KafkaNativeACL object
 type KafkaNativeACLController struct {
 	client.Client
 	avnGen avngen.Client
@@ -39,6 +39,20 @@ func (r *KafkaNativeACLController) Observe(ctx context.Context, acl *v1alpha1.Ka
 	}
 
 	if acl.Status.ID == "" {
+		// No stored ID — the CRD may have been recreated while the ACL still exists on Aiven
+		// (e.g. after a deletionPolicy:Orphan deletion). Check the live list before creating.
+		list, err := r.avnGen.ServiceKafkaNativeAclList(ctx, acl.Spec.Project, acl.Spec.ServiceName)
+		if err != nil {
+			return Observation{}, fmt.Errorf("list Kafka-native ACLs error: %w", err)
+		}
+		for _, existing := range list.KafkaAcl {
+			if nativeSpecMatches(acl.Spec, existing) {
+				acl.Status.ID = existing.Id
+				markInstanceRunning(acl)
+				// The spec is immutable, so an adopted ACL is always up to date.
+				return Observation{ResourceExists: true, ResourceUpToDate: true}, nil
+			}
+		}
 		return Observation{ResourceExists: false}, nil
 	}
 
@@ -53,10 +67,7 @@ func (r *KafkaNativeACLController) Observe(ctx context.Context, acl *v1alpha1.Ka
 	markInstanceRunning(acl)
 
 	// The spec is immutable, so an existing ACL is always up to date.
-	return Observation{
-		ResourceExists:   true,
-		ResourceUpToDate: hasLatestGeneration(acl),
-	}, nil
+	return Observation{ResourceExists: true, ResourceUpToDate: true}, nil
 }
 
 func (r *KafkaNativeACLController) Create(ctx context.Context, acl *v1alpha1.KafkaNativeACL) (CreateResult, error) {
@@ -95,4 +106,16 @@ func (r *KafkaNativeACLController) Delete(ctx context.Context, acl *v1alpha1.Kaf
 		return fmt.Errorf("delete Kafka-native ACL error: %w", err)
 	}
 	return nil
+}
+
+// nativeSpecMatches reports whether an existing Kafka-native ACL from Aiven matches the CRD
+// spec. Only the immutable identifying fields are compared; Host is excluded because it
+// defaults to "*" and is not used for identity by the Aiven API.
+func nativeSpecMatches(spec v1alpha1.KafkaNativeACLSpec, existing kafka.KafkaAclOut) bool {
+	return spec.Principal == existing.Principal &&
+		spec.ResourceName == existing.ResourceName &&
+		spec.Operation == existing.Operation &&
+		spec.PatternType == existing.PatternType &&
+		string(spec.PermissionType) == string(existing.PermissionType) &&
+		spec.ResourceType == existing.ResourceType
 }
