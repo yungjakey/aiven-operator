@@ -62,14 +62,16 @@ func (r *KafkaACLController) Create(ctx context.Context, acl *v1alpha1.KafkaACL)
 	if err := r.applyACL(ctx, acl); err != nil {
 		return CreateResult{}, err
 	}
-	return CreateResult{}, nil
+	markInstanceRunning(acl)
+	return CreateResult{ResourceExists: true, ResourceUpToDate: true}, nil
 }
 
 func (r *KafkaACLController) Update(ctx context.Context, acl *v1alpha1.KafkaACL) (UpdateResult, error) {
 	if err := r.applyACL(ctx, acl); err != nil {
 		return UpdateResult{}, err
 	}
-	return UpdateResult{}, nil
+	markInstanceRunning(acl)
+	return UpdateResult{ResourceExists: true, ResourceUpToDate: true}, nil
 }
 
 func (r *KafkaACLController) Delete(ctx context.Context, acl *v1alpha1.KafkaACL) error {
