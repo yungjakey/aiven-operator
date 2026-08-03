@@ -95,6 +95,10 @@ func TestKafkaSchemaRegistryACLReconciler(t *testing.T) {
 		avn.EXPECT().
 			ServiceGet(mock.Anything, acl.Spec.Project, acl.Spec.ServiceName, mock.Anything).
 			Return(runningService(), nil).Once()
+		// New path: empty list means no orphan, proceed to create.
+		avn.EXPECT().
+			ServiceSchemaRegistryAclList(mock.Anything, acl.Spec.Project, acl.Spec.ServiceName).
+			Return(nil, nil).Once()
 		avn.EXPECT().
 			ServiceSchemaRegistryAclAdd(
 				mock.Anything, acl.Spec.Project, acl.Spec.ServiceName,
@@ -112,13 +116,13 @@ func TestKafkaSchemaRegistryACLReconciler(t *testing.T) {
 
 		r, res, err := runKafkaSchemaRegistryACLScenario(t, acl, avn)
 		require.NoError(t, err)
-		require.Equal(t, ctrlruntime.Result{RequeueAfter: requeueTimeout}, res)
+		require.Equal(t, ctrlruntime.Result{RequeueAfter: testPollInterval}, res)
 
 		got := &v1alpha1.KafkaSchemaRegistryACL{}
 		require.NoError(t, r.Get(t.Context(), types.NamespacedName{Name: acl.Name, Namespace: acl.Namespace}, got))
 		require.Equal(t, "acl-id", got.Status.ACLId)
 		require.Equal(t, "1", got.Annotations[processedGenerationAnnotation])
-		require.NotContains(t, got.Annotations, instanceIsRunningAnnotation)
+		require.Equal(t, "true", got.Annotations[instanceIsRunningAnnotation])
 	})
 
 	t.Run("Fails when the created ACL is absent from the Aiven response", func(t *testing.T) {
@@ -129,6 +133,10 @@ func TestKafkaSchemaRegistryACLReconciler(t *testing.T) {
 		avn.EXPECT().
 			ServiceGet(mock.Anything, acl.Spec.Project, acl.Spec.ServiceName, mock.Anything).
 			Return(runningService(), nil).Once()
+		// New path: empty list means no orphan, proceed to create.
+		avn.EXPECT().
+			ServiceSchemaRegistryAclList(mock.Anything, acl.Spec.Project, acl.Spec.ServiceName).
+			Return(nil, nil).Once()
 		// The add succeeds but the returned list contains no matching entry,
 		// so the ID cannot be resolved and the reconcile must fail.
 		avn.EXPECT().
@@ -209,12 +217,12 @@ func TestKafkaSchemaRegistryACLReconciler(t *testing.T) {
 
 		r, res, err := runKafkaSchemaRegistryACLScenario(t, acl, avn)
 		require.NoError(t, err)
-		require.Equal(t, ctrlruntime.Result{RequeueAfter: requeueTimeout}, res)
+		require.Equal(t, ctrlruntime.Result{RequeueAfter: testPollInterval}, res)
 
 		got := &v1alpha1.KafkaSchemaRegistryACL{}
 		require.NoError(t, r.Get(t.Context(), types.NamespacedName{Name: acl.Name, Namespace: acl.Namespace}, got))
 		require.Equal(t, "new-id", got.Status.ACLId)
-		require.NotContains(t, got.Annotations, instanceIsRunningAnnotation)
+		require.Equal(t, "true", got.Annotations[instanceIsRunningAnnotation])
 	})
 
 	t.Run("Deletes KafkaSchemaRegistryACL and removes finalizer on deletion", func(t *testing.T) {
@@ -259,5 +267,38 @@ func TestKafkaSchemaRegistryACLReconciler(t *testing.T) {
 		got := &v1alpha1.KafkaSchemaRegistryACL{}
 		err = r.Get(t.Context(), types.NamespacedName{Name: acl.Name, Namespace: acl.Namespace}, got)
 		require.True(t, apierrors.IsNotFound(err))
+	})
+
+	t.Run("Adopts orphaned KafkaSchemaRegistryACL when status ACLId is empty but spec matches existing entry", func(t *testing.T) {
+		// Simulates: CRD deleted with deletionPolicy:Orphan, then re-applied.
+		// Without the fix, the operator would call ServiceSchemaRegistryAclAdd and create a
+		// duplicate instead of adopting the existing entry.
+		acl := newKafkaSchemaRegistryACL(t)
+		acl.Generation = 1
+		// No Status.ACLId — fresh CRD after Orphan deletion.
+
+		avn := avngen.NewMockClient(t)
+		avn.EXPECT().
+			ServiceGet(mock.Anything, acl.Spec.Project, acl.Spec.ServiceName, mock.Anything).
+			Return(runningService(), nil).Once()
+		avn.EXPECT().
+			ServiceSchemaRegistryAclList(mock.Anything, acl.Spec.Project, acl.Spec.ServiceName).
+			Return([]kafkaschemaregistry.AclOut{{
+				Id:         new("orphaned-schema-acl-id"),
+				Permission: kafkaschemaregistry.PermissionType(acl.Spec.Permission),
+				Resource:   acl.Spec.Resource,
+				Username:   acl.Spec.Username,
+			}}, nil).Once()
+		// ServiceSchemaRegistryAclAdd must NOT be called — adoption avoids the duplicate.
+
+		r, res, err := runKafkaSchemaRegistryACLScenario(t, acl, avn)
+		require.NoError(t, err)
+		require.Equal(t, ctrlruntime.Result{RequeueAfter: testPollInterval}, res)
+
+		got := &v1alpha1.KafkaSchemaRegistryACL{}
+		require.NoError(t, r.Get(t.Context(), types.NamespacedName{Name: acl.Name, Namespace: acl.Namespace}, got))
+		require.Equal(t, "orphaned-schema-acl-id", got.Status.ACLId)
+		require.Equal(t, "1", got.Annotations[processedGenerationAnnotation])
+		require.Equal(t, "true", got.Annotations[instanceIsRunningAnnotation])
 	})
 }
