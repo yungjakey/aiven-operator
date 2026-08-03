@@ -69,12 +69,8 @@ func (r *KafkaQuotaController) Create(ctx context.Context, q *v1alpha1.KafkaQuot
 	if err := r.applyQuota(ctx, q); err != nil {
 		return CreateResult{}, err
 	}
-
-	const reason = "CreatedOrUpdated"
-	meta.SetStatusCondition(&q.Status.Conditions, getInitializedCondition(reason, "Successfully created or updated the instance in Aiven"))
-	meta.SetStatusCondition(&q.Status.Conditions, getRunningCondition(metav1.ConditionUnknown, reason, "Successfully created or updated the instance in Aiven, status remains unknown"))
-
-	return CreateResult{}, nil
+	markInstanceRunning(q)
+	return CreateResult{ResourceExists: true, ResourceUpToDate: true}, nil
 }
 
 func (r *KafkaQuotaController) Update(ctx context.Context, q *v1alpha1.KafkaQuota) (UpdateResult, error) {
@@ -82,12 +78,8 @@ func (r *KafkaQuotaController) Update(ctx context.Context, q *v1alpha1.KafkaQuot
 	if err := r.applyQuota(ctx, q); err != nil {
 		return UpdateResult{}, err
 	}
-
-	const reason = "CreatedOrUpdated"
-	meta.SetStatusCondition(&q.Status.Conditions, getInitializedCondition(reason, "Successfully created or updated the instance in Aiven"))
-	meta.SetStatusCondition(&q.Status.Conditions, getRunningCondition(metav1.ConditionUnknown, reason, "Successfully created or updated the instance in Aiven, status remains unknown"))
-
-	return UpdateResult{}, nil
+	markInstanceRunning(q)
+	return UpdateResult{ResourceExists: true, ResourceUpToDate: true}, nil
 }
 
 func (r *KafkaQuotaController) Delete(ctx context.Context, q *v1alpha1.KafkaQuota) error {
