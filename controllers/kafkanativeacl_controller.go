@@ -109,10 +109,19 @@ func (r *KafkaNativeACLController) Delete(ctx context.Context, acl *v1alpha1.Kaf
 }
 
 // nativeSpecMatches reports whether an existing Kafka-native ACL from Aiven matches the CRD
-// spec. Only the immutable identifying fields are compared; Host is excluded because it
-// defaults to "*" and is not used for identity by the Aiven API.
+// spec. All immutable identifying fields are compared. Host is normalised to "*" before
+// comparison because the CRD default is "*" but an empty string carries the same meaning.
 func nativeSpecMatches(spec v1alpha1.KafkaNativeACLSpec, existing kafka.KafkaAclOut) bool {
-	return spec.Principal == existing.Principal &&
+	specHost := spec.Host
+	if specHost == "" {
+		specHost = "*"
+	}
+	existingHost := existing.Host
+	if existingHost == "" {
+		existingHost = "*"
+	}
+	return specHost == existingHost &&
+		spec.Principal == existing.Principal &&
 		spec.ResourceName == existing.ResourceName &&
 		spec.Operation == existing.Operation &&
 		spec.PatternType == existing.PatternType &&

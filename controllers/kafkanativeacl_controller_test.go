@@ -267,4 +267,81 @@ func TestKafkaNativeACLReconciler(t *testing.T) {
 		require.Equal(t, "1", got.Annotations[processedGenerationAnnotation])
 		require.Equal(t, "true", got.Annotations[instanceIsRunningAnnotation])
 	})
+
+	t.Run("Adopts orphaned KafkaNativeACL when Aiven returns Host as empty string and spec has default '*'", func(t *testing.T) {
+		// Aiven may return host="" while the CRD spec defaults to host="*".
+		// nativeSpecMatches must normalise both to "*" so the ACL is still adopted.
+		acl := newObjectFromYAML[v1alpha1.KafkaNativeACL](t, yamlKafkaNativeACL)
+		acl.Generation = 1
+
+		avn := avngen.NewMockClient(t)
+		avn.EXPECT().
+			ServiceGet(mock.Anything, acl.Spec.Project, acl.Spec.ServiceName, mock.Anything).
+			Return(runningService(), nil).Once()
+		avn.EXPECT().
+			ServiceKafkaNativeAclList(mock.Anything, acl.Spec.Project, acl.Spec.ServiceName).
+			Return(&kafka.ServiceKafkaNativeAclListOut{
+				KafkaAcl: []kafka.KafkaAclOut{
+					{
+						Id:             "orphaned-acl-id",
+						Principal:      acl.Spec.Principal,
+						ResourceName:   acl.Spec.ResourceName,
+						Operation:      acl.Spec.Operation,
+						PatternType:    acl.Spec.PatternType,
+						PermissionType: kafka.KafkaAclPermissionType(acl.Spec.PermissionType),
+						ResourceType:   acl.Spec.ResourceType,
+						Host:           "", // Aiven returns "" — spec has default "*"
+					},
+				},
+			}, nil).Once()
+
+		r, res, err := runKafkaNativeACLScenario(t, acl, avn)
+		require.NoError(t, err)
+		require.Equal(t, ctrlruntime.Result{RequeueAfter: testPollInterval}, res)
+
+		got := &v1alpha1.KafkaNativeACL{}
+		require.NoError(t, r.Get(t.Context(), types.NamespacedName{Name: acl.Name, Namespace: acl.Namespace}, got))
+		require.Equal(t, "orphaned-acl-id", got.Status.ID)
+	})
+
+	t.Run("Does not adopt ACL with a different Host", func(t *testing.T) {
+		// Two ACLs with identical principal/resource/op but different Host must not be confused.
+		// An ACL with Host="10.0.0.1" must not be adopted when the spec says Host="*".
+		acl := newObjectFromYAML[v1alpha1.KafkaNativeACL](t, yamlKafkaNativeACL)
+		acl.Generation = 1
+		// spec has Host="*" (default from YAML fixture)
+
+		avn := avngen.NewMockClient(t)
+		avn.EXPECT().
+			ServiceGet(mock.Anything, acl.Spec.Project, acl.Spec.ServiceName, mock.Anything).
+			Return(runningService(), nil).Once()
+		avn.EXPECT().
+			ServiceKafkaNativeAclList(mock.Anything, acl.Spec.Project, acl.Spec.ServiceName).
+			Return(&kafka.ServiceKafkaNativeAclListOut{
+				KafkaAcl: []kafka.KafkaAclOut{
+					{
+						Id:             "different-host-acl",
+						Principal:      acl.Spec.Principal,
+						ResourceName:   acl.Spec.ResourceName,
+						Operation:      acl.Spec.Operation,
+						PatternType:    acl.Spec.PatternType,
+						PermissionType: kafka.KafkaAclPermissionType(acl.Spec.PermissionType),
+						ResourceType:   acl.Spec.ResourceType,
+						Host:           "10.0.0.1", // different host — must not be adopted
+					},
+				},
+			}, nil).Once()
+		// No match → falls through to Create.
+		avn.EXPECT().
+			ServiceKafkaNativeAclAdd(mock.Anything, acl.Spec.Project, acl.Spec.ServiceName, mock.Anything).
+			Return(&kafka.ServiceKafkaNativeAclAddOut{Id: "new-acl-id"}, nil).Once()
+
+		r, res, err := runKafkaNativeACLScenario(t, acl, avn)
+		require.NoError(t, err)
+		require.Equal(t, ctrlruntime.Result{RequeueAfter: testPollInterval}, res)
+
+		got := &v1alpha1.KafkaNativeACL{}
+		require.NoError(t, r.Get(t.Context(), types.NamespacedName{Name: acl.Name, Namespace: acl.Namespace}, got))
+		require.Equal(t, "new-acl-id", got.Status.ID)
+	})
 }
