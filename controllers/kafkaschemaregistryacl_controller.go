@@ -71,9 +71,10 @@ func (r *KafkaSchemaRegistryACLController) Create(ctx context.Context, acl *v1al
 	return CreateResult{}, nil
 }
 
-// Update is no-op.
-func (r *KafkaSchemaRegistryACLController) Update(_ context.Context, _ *v1alpha1.KafkaSchemaRegistryACL) (UpdateResult, error) {
-	return UpdateResult{}, nil
+// Update is a no-op: the spec is immutable, so an existing ACL never needs updating.
+func (r *KafkaSchemaRegistryACLController) Update(_ context.Context, acl *v1alpha1.KafkaSchemaRegistryACL) (UpdateResult, error) {
+	markInstanceRunning(acl)
+	return UpdateResult{ResourceExists: true, ResourceUpToDate: true}, nil
 }
 
 func (r *KafkaSchemaRegistryACLController) Delete(ctx context.Context, acl *v1alpha1.KafkaSchemaRegistryACL) error {
