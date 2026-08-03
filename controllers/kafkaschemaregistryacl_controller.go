@@ -39,8 +39,20 @@ func (r *KafkaSchemaRegistryACLController) Observe(ctx context.Context, acl *v1a
 		return Observation{}, err
 	}
 
-	// Never created yet.
 	if acl.Status.ACLId == "" {
+		// No stored ID — adopt an existing ACL if one matches the spec (e.g. after an
+		// Orphan-policy deletion and re-application of the CRD).
+		list, err := r.avnGen.ServiceSchemaRegistryAclList(ctx, acl.Spec.Project, acl.Spec.ServiceName)
+		if err != nil {
+			return Observation{}, fmt.Errorf("cannot list KafkaSchemaRegistryACLs on Aiven side: %w", err)
+		}
+		for _, existing := range list {
+			if existing.Id != nil && schemaRegistrySpecMatches(acl.Spec, existing) {
+				acl.Status.ACLId = *existing.Id
+				markInstanceRunning(acl)
+				return Observation{ResourceExists: true, ResourceUpToDate: true}, nil
+			}
+		}
 		return Observation{ResourceExists: false}, nil
 	}
 
@@ -68,10 +80,12 @@ func (r *KafkaSchemaRegistryACLController) Create(ctx context.Context, acl *v1al
 	if err := r.addACL(ctx, acl); err != nil {
 		return CreateResult{}, err
 	}
-	return CreateResult{}, nil
+
+	markInstanceRunning(acl)
+	return CreateResult{ResourceExists: true, ResourceUpToDate: true}, nil
 }
 
-// Update is no-op.
+// Update is a no-op: the spec is immutable, so an existing ACL never needs updating.
 func (r *KafkaSchemaRegistryACLController) Update(_ context.Context, _ *v1alpha1.KafkaSchemaRegistryACL) (UpdateResult, error) {
 	return UpdateResult{}, nil
 }
@@ -131,4 +145,11 @@ func (r *KafkaSchemaRegistryACLController) exists(
 		list,
 		func(v kafkaschemaregistry.AclOut) bool { return v.Id != nil && *v.Id == acl.Status.ACLId },
 	), nil
+}
+
+// schemaRegistrySpecMatches reports whether an existing Schema Registry ACL matches the CRD spec.
+func schemaRegistrySpecMatches(spec v1alpha1.KafkaSchemaRegistryACLSpec, existing kafkaschemaregistry.AclOut) bool {
+	return string(existing.Permission) == spec.Permission &&
+		existing.Resource == spec.Resource &&
+		existing.Username == spec.Username
 }
