@@ -3,6 +3,8 @@
 ## [MAJOR.MINOR.PATCH] - YYYY-MM-DD
 
 - Add kind: `OrganizationProject` to manage Aiven projects that belong to an organization or organizational unit.
+- Fix `KafkaNativeACL` and `KafkaSchemaRegistryACL` to adopt orphaned ACLs when the
+  CRD is recreated after an `Orphan` deletion, instead of failing with a 409 conflict.
 
 ## v0.43.0 - 2026-07-24
 
