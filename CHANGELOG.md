@@ -2,6 +2,12 @@
 
 ## [MAJOR.MINOR.PATCH] - YYYY-MM-DD
 
+- Fix `KafkaSchema` never converging when `schema` and `compatibilityLevel` change in the same apply:
+  the compatibility level is now set on the subject before the new schema version is registered, so a
+  schema that only becomes valid after a loosening change (for example `BACKWARD` to `NONE`) is accepted.
+  Behavior change: a schema the registry rejects now leaves the new compatibility level applied, and
+  tightening the level together with a schema that violates it now fails instead of silently succeeding
+
 ## v0.44.0 - 2026-08-11
 
 - Add kind: `OrganizationProject` to manage Aiven projects that belong to an organization or organizational unit.
