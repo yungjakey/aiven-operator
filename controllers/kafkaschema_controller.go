@@ -29,8 +29,15 @@ import (
 )
 
 // kafkaSchemaAppliedFingerprintAnnotation stores a hash of the last
-// schema body + resolved references + compatibility level.
+// schema body + resolved references (without compatibility level).
 const kafkaSchemaAppliedFingerprintAnnotation = "controllers.aiven.io/kafka-schema-applied"
+
+// kafkaSchemaAppliedCompatFingerprintAnnotation stores a hash of the last
+// applied compatibility level. Tracking it separately allows the reconciler
+// to apply a compatibility level change before re-registering the schema,
+// so a loosening change (e.g. BACKWARD -> NONE) that admits a breaking
+// schema converges in two steps instead of looping forever.
+const kafkaSchemaAppliedCompatFingerprintAnnotation = "controllers.aiven.io/kafka-schema-compat-applied"
 
 // kafkaSchemaRefIndex is the cache index key for finding KafkaSchemas that
 // reference another KafkaSchema by name.
@@ -126,7 +133,11 @@ func kafkaSchemaVersionChangedPredicate() predicate.Predicate {
 }
 
 // Observe decides whether the registry already serves what the spec describes.
-// Drift detection is driven by an annotation fingerprint of the last applied schema.
+// Drift detection is driven by two fingerprints: one for the compatibility
+// level and one for the schema body + references. Checking them independently
+// lets the reconciler apply a compatibility level change first, so a loosening
+// that admits a breaking schema converges across two reconciliation cycles
+// instead of looping.
 func (r *KafkaSchemaController) Observe(ctx context.Context, schema *v1alpha1.KafkaSchema) (Observation, error) {
 	if _, err := getServiceIfOperational(ctx, r.avnGen, schema.Spec.Project, schema.Spec.ServiceName); err != nil {
 		return Observation{}, err
@@ -161,10 +172,16 @@ func (r *KafkaSchemaController) Observe(ctx context.Context, schema *v1alpha1.Ka
 		}
 		resolvedRefs = refs
 	}
-	desiredFP := fingerprintSchema(schema, resolvedRefs)
 
-	appliedFP, ok := schema.GetAnnotations()[kafkaSchemaAppliedFingerprintAnnotation]
-	if !ok || appliedFP != desiredFP {
+	desiredSchemaFP := fingerprintSchema(schema, resolvedRefs)
+	appliedSchemaFP, hasSchemaFP := schema.GetAnnotations()[kafkaSchemaAppliedFingerprintAnnotation]
+	schemaDrift := !hasSchemaFP || appliedSchemaFP != desiredSchemaFP
+
+	desiredCompatFP := fingerprintCompatLevel(schema)
+	appliedCompatFP, hasCompatFP := schema.GetAnnotations()[kafkaSchemaAppliedCompatFingerprintAnnotation]
+	compatDrift := !hasCompatFP || appliedCompatFP != desiredCompatFP
+
+	if schemaDrift || compatDrift {
 		return Observation{ResourceExists: true, ResourceUpToDate: false}, nil
 	}
 
@@ -213,7 +230,25 @@ func (r *KafkaSchemaController) Update(ctx context.Context, schema *v1alpha1.Kaf
 // Schema A -> ID:1, Version:1
 // Schema B -> ID:2, Version:2
 // Revert to A -> ID:1, Version:1
+//
+// The compatibility level is set first, because the registry validates a new
+// version against the level currently configured for the subject. A rejected
+// schema leaves the new level applied and is retried on the next reconciliation.
+// Configuring a subject that does not exist yet is accepted by the registry and
+// does not make it visible to Observe.
 func (r *KafkaSchemaController) applySchema(ctx context.Context, schema *v1alpha1.KafkaSchema) error {
+	if schema.Spec.CompatibilityLevel != "" {
+		if _, err := r.avnGen.ServiceSchemaRegistrySubjectConfigPut(
+			ctx,
+			schema.Spec.Project,
+			schema.Spec.ServiceName,
+			schema.Spec.SubjectName,
+			&kafkaschemaregistry.ServiceSchemaRegistrySubjectConfigPutIn{Compatibility: schema.Spec.CompatibilityLevel},
+		); err != nil {
+			return fmt.Errorf("cannot update Kafka Schema Configuration: %w", err)
+		}
+	}
+
 	postIn := &kafkaschemaregistry.ServiceSchemaRegistrySubjectVersionPostIn{
 		Schema:     schema.Spec.Schema,
 		SchemaType: schema.Spec.SchemaType,
@@ -247,22 +282,15 @@ func (r *KafkaSchemaController) applySchema(ctx context.Context, schema *v1alpha
 	schema.Status.ID = schemaID
 	schema.Status.Version = version
 
-	if schema.Spec.CompatibilityLevel != "" {
-		if _, err := r.avnGen.ServiceSchemaRegistrySubjectConfigPut(
-			ctx,
-			schema.Spec.Project,
-			schema.Spec.ServiceName,
-			schema.Spec.SubjectName,
-			&kafkaschemaregistry.ServiceSchemaRegistrySubjectConfigPutIn{Compatibility: schema.Spec.CompatibilityLevel},
-		); err != nil {
-			return fmt.Errorf("cannot update Kafka Schema Configuration: %w", err)
-		}
-	}
-
 	metav1.SetMetaDataAnnotation(
 		&schema.ObjectMeta,
 		kafkaSchemaAppliedFingerprintAnnotation,
 		fingerprintSchema(schema, resolvedRefs),
+	)
+	metav1.SetMetaDataAnnotation(
+		&schema.ObjectMeta,
+		kafkaSchemaAppliedCompatFingerprintAnnotation,
+		fingerprintCompatLevel(schema),
 	)
 
 	return nil
@@ -309,21 +337,36 @@ func (r *KafkaSchemaController) lookupVersionForID(
 	return 0, fmt.Errorf("%w: schema ID %d not visible in registry yet", errPreconditionNotMet, id)
 }
 
-// fingerprintSchema returns a stable hash of the provided schema.
+// fingerprintSchema returns a stable hash of the schema body, type, and references.
+// Compatibility level is excluded; it is tracked separately by fingerprintCompatLevel
+// so the reconciler can apply level changes before re-registering the schema.
 func fingerprintSchema(schema *v1alpha1.KafkaSchema, refs []kafkaschemaregistry.ReferenceIn) string {
 	sorted := append([]kafkaschemaregistry.ReferenceIn(nil), refs...)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
 
 	payload := struct {
-		Schema             string                                `json:"schema"`
-		SchemaType         kafkaschemaregistry.SchemaType        `json:"schemaType"`
-		CompatibilityLevel kafkaschemaregistry.CompatibilityType `json:"compatibilityLevel,omitempty"`
-		References         []kafkaschemaregistry.ReferenceIn     `json:"references"`
+		Schema     string                            `json:"schema"`
+		SchemaType kafkaschemaregistry.SchemaType    `json:"schemaType"`
+		References []kafkaschemaregistry.ReferenceIn `json:"references"`
 	}{
-		Schema:             schema.Spec.Schema,
-		SchemaType:         schema.Spec.SchemaType,
+		Schema:     schema.Spec.Schema,
+		SchemaType: schema.Spec.SchemaType,
+		References: sorted,
+	}
+
+	buf, _ := json.Marshal(payload)
+	sum := sha256.Sum256(buf)
+	return hex.EncodeToString(sum[:])
+}
+
+// fingerprintCompatLevel returns a stable hash of the compatibility level.
+// Tracked separately so the reconciler can detect and apply level-only drift
+// before attempting to register the schema body.
+func fingerprintCompatLevel(schema *v1alpha1.KafkaSchema) string {
+	payload := struct {
+		CompatibilityLevel kafkaschemaregistry.CompatibilityType `json:"compatibilityLevel,omitempty"`
+	}{
 		CompatibilityLevel: schema.Spec.CompatibilityLevel,
-		References:         sorted,
 	}
 
 	buf, _ := json.Marshal(payload)

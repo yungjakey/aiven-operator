@@ -123,6 +123,8 @@ func TestKafkaSchemaReconciler(t *testing.T) {
 		require.Equal(t, 1, got.Status.Version, "Status.Version must be the version that holds the freshly-written id")
 		require.Equal(t, fingerprintSchema(schema, nil), got.Annotations[kafkaSchemaAppliedFingerprintAnnotation],
 			"applySchema must record the applied fingerprint so the next Observe sees no drift")
+		require.Equal(t, fingerprintCompatLevel(schema), got.Annotations[kafkaSchemaAppliedCompatFingerprintAnnotation],
+			"applySchema must record the compat fingerprint so the next Observe sees no drift")
 	})
 
 	t.Run("Creates KafkaSchema with compatibility level", func(t *testing.T) {
@@ -138,6 +140,13 @@ func TestKafkaSchemaReconciler(t *testing.T) {
 			ServiceSchemaRegistrySubjectVersionsGet(mock.Anything, schema.Spec.Project, schema.Spec.ServiceName, schema.Spec.SubjectName).
 			Return(nil, newAivenError(404, "not found")).Once()
 		avn.EXPECT().
+			ServiceSchemaRegistrySubjectConfigPut(
+				mock.Anything, schema.Spec.Project, schema.Spec.ServiceName, schema.Spec.SubjectName,
+				mock.MatchedBy(func(in *kafkaschemaregistry.ServiceSchemaRegistrySubjectConfigPutIn) bool {
+					return in.Compatibility == kafkaschemaregistry.CompatibilityTypeBackward
+				}),
+			).Return(kafkaschemaregistry.CompatibilityTypeBackward, nil).Once()
+		avn.EXPECT().
 			ServiceSchemaRegistrySubjectVersionPost(
 				mock.Anything, schema.Spec.Project, schema.Spec.ServiceName, schema.Spec.SubjectName, mock.Anything,
 			).Return(7, nil).Once()
@@ -147,13 +156,6 @@ func TestKafkaSchemaReconciler(t *testing.T) {
 		avn.EXPECT().
 			ServiceSchemaRegistrySubjectVersionGet(mock.Anything, schema.Spec.Project, schema.Spec.ServiceName, schema.Spec.SubjectName, 1).
 			Return(&kafkaschemaregistry.ServiceSchemaRegistrySubjectVersionGetOut{Id: 7, Version: 1}, nil).Once()
-		avn.EXPECT().
-			ServiceSchemaRegistrySubjectConfigPut(
-				mock.Anything, schema.Spec.Project, schema.Spec.ServiceName, schema.Spec.SubjectName,
-				mock.MatchedBy(func(in *kafkaschemaregistry.ServiceSchemaRegistrySubjectConfigPutIn) bool {
-					return in.Compatibility == kafkaschemaregistry.CompatibilityTypeBackward
-				}),
-			).Return(kafkaschemaregistry.CompatibilityTypeBackward, nil).Once()
 
 		r, res, err := runKafkaSchemaScenario(t, schema, avn)
 		require.NoError(t, err)
@@ -162,6 +164,7 @@ func TestKafkaSchemaReconciler(t *testing.T) {
 		got := &v1alpha1.KafkaSchema{}
 		require.NoError(t, r.Get(t.Context(), types.NamespacedName{Name: schema.Name, Namespace: schema.Namespace}, got))
 		require.Equal(t, 7, got.Status.ID)
+		require.Equal(t, fingerprintCompatLevel(schema), got.Annotations[kafkaSchemaAppliedCompatFingerprintAnnotation])
 	})
 
 	t.Run("Creates KafkaSchema with references (PROTOBUF)", func(t *testing.T) {
@@ -210,8 +213,9 @@ func TestKafkaSchemaReconciler(t *testing.T) {
 		schema := newObjectFromYAML[v1alpha1.KafkaSchema](t, yamlKafkaSchema)
 		schema.Generation = 1
 		schema.Annotations = map[string]string{
-			processedGenerationAnnotation:           "1",
-			kafkaSchemaAppliedFingerprintAnnotation: fingerprintSchema(schema, nil),
+			processedGenerationAnnotation:                 "1",
+			kafkaSchemaAppliedFingerprintAnnotation:       fingerprintSchema(schema, nil),
+			kafkaSchemaAppliedCompatFingerprintAnnotation: fingerprintCompatLevel(schema),
 		}
 		schema.Status.ID = 42
 		schema.Status.Version = 2
@@ -241,9 +245,10 @@ func TestKafkaSchemaReconciler(t *testing.T) {
 		// Stale fingerprint pinned to a previous spec body — drift is detected
 		// independently of generation.
 		schema.Annotations = map[string]string{
-			processedGenerationAnnotation:           "1",
-			instanceIsRunningAnnotation:             "true",
-			kafkaSchemaAppliedFingerprintAnnotation: "stale-fingerprint",
+			processedGenerationAnnotation:                 "1",
+			instanceIsRunningAnnotation:                   "true",
+			kafkaSchemaAppliedFingerprintAnnotation:       "stale-fingerprint",
+			kafkaSchemaAppliedCompatFingerprintAnnotation: "stale-fingerprint",
 		}
 		schema.Status.ID = 42
 		schema.Status.Version = 1
@@ -278,6 +283,8 @@ func TestKafkaSchemaReconciler(t *testing.T) {
 		require.Equal(t, 2, got.Status.Version, "Status.Version must follow the freshly-written id")
 		require.Equal(t, fingerprintSchema(schema, nil), got.Annotations[kafkaSchemaAppliedFingerprintAnnotation],
 			"applySchema must overwrite the stale fingerprint")
+		require.Equal(t, fingerprintCompatLevel(schema), got.Annotations[kafkaSchemaAppliedCompatFingerprintAnnotation],
+			"applySchema must overwrite the stale compat fingerprint")
 	})
 
 	t.Run("Re-applies via idempotent POST when no fingerprint annotation is set", func(t *testing.T) {
@@ -316,6 +323,8 @@ func TestKafkaSchemaReconciler(t *testing.T) {
 		require.Equal(t, 1, got.Status.Version, "Status.Version follows the freshly-written id")
 		require.Equal(t, fingerprintSchema(schema, nil), got.Annotations[kafkaSchemaAppliedFingerprintAnnotation],
 			"the fingerprint annotation is the source of truth for drift detection on the next pass")
+		require.Equal(t, fingerprintCompatLevel(schema), got.Annotations[kafkaSchemaAppliedCompatFingerprintAnnotation],
+			"the compat fingerprint annotation is the source of truth for drift detection on the next pass")
 	})
 
 	// Soft-delete followed by hard-delete
@@ -688,9 +697,10 @@ func TestKafkaSchemaReconciler(t *testing.T) {
 			{Name: "common.proto", Subject: "resolved-subject", Version: 1},
 		})
 		schema.Annotations = map[string]string{
-			processedGenerationAnnotation:           "1",
-			instanceIsRunningAnnotation:             "true",
-			kafkaSchemaAppliedFingerprintAnnotation: oldFP,
+			processedGenerationAnnotation:                 "1",
+			instanceIsRunningAnnotation:                   "true",
+			kafkaSchemaAppliedFingerprintAnnotation:       oldFP,
+			kafkaSchemaAppliedCompatFingerprintAnnotation: fingerprintCompatLevel(schema),
 		}
 		schema.Status.ID = 50
 		schema.Status.Version = 1
@@ -748,9 +758,10 @@ func TestKafkaSchemaReconciler(t *testing.T) {
 			{Name: "stale.proto", Subject: "stale-subject", Version: 1},
 		})
 		schema.Annotations = map[string]string{
-			processedGenerationAnnotation:           "1",
-			instanceIsRunningAnnotation:             "true",
-			kafkaSchemaAppliedFingerprintAnnotation: staleFP,
+			processedGenerationAnnotation:                 "1",
+			instanceIsRunningAnnotation:                   "true",
+			kafkaSchemaAppliedFingerprintAnnotation:       staleFP,
+			kafkaSchemaAppliedCompatFingerprintAnnotation: fingerprintCompatLevel(schema),
 		}
 		schema.Status.ID = 77
 		schema.Status.Version = 3
@@ -1028,15 +1039,15 @@ func TestFingerprintSchema(t *testing.T) {
 		empty := newObjectFromYAML[v1alpha1.KafkaSchema](t, yamlKafkaSchema)
 		empty.Spec.CompatibilityLevel = ""
 		require.Equal(t, fingerprintSchema(absent, nil), fingerprintSchema(empty, nil),
-			"empty CompatibilityLevel must hash identically to an absent one — applySchema treats both as 'unmanaged'")
+			"empty CompatibilityLevel must hash identically to an absent one — schema fingerprint excludes compat level")
 	})
 
-	t.Run("non-empty CompatibilityLevel changes the fingerprint", func(t *testing.T) {
+	t.Run("non-empty CompatibilityLevel does not change schema fingerprint", func(t *testing.T) {
 		absent := newObjectFromYAML[v1alpha1.KafkaSchema](t, yamlKafkaSchema)
 		set := newObjectFromYAML[v1alpha1.KafkaSchema](t, yamlKafkaSchema)
 		set.Spec.CompatibilityLevel = kafkaschemaregistry.CompatibilityTypeBackward
-		require.NotEqual(t, fingerprintSchema(absent, nil), fingerprintSchema(set, nil),
-			"setting a CompatibilityLevel must change the fingerprint so the next pass detects drift and PUTs the config")
+		require.Equal(t, fingerprintSchema(absent, nil), fingerprintSchema(set, nil),
+			"schema fingerprint must not include compat level — it is tracked separately")
 	})
 
 	t.Run("schema body change flips the fingerprint", func(t *testing.T) {
@@ -1072,6 +1083,32 @@ func TestFingerprintSchema(t *testing.T) {
 		v2 := []kafkaschemaregistry.ReferenceIn{{Name: "a.proto", Subject: "a", Version: 2}}
 		require.NotEqual(t, fingerprintSchema(s, v1), fingerprintSchema(s, v2),
 			"a referent advancing to a new version must re-fingerprint so dependents re-POST")
+	})
+}
+
+func TestFingerprintCompatLevel(t *testing.T) {
+	t.Run("empty CompatibilityLevel hashes to empty payload", func(t *testing.T) {
+		s := newObjectFromYAML[v1alpha1.KafkaSchema](t, yamlKafkaSchema)
+		s.Spec.CompatibilityLevel = ""
+		fp := fingerprintCompatLevel(s)
+		require.NotEmpty(t, fp)
+	})
+
+	t.Run("non-empty CompatibilityLevel changes the fingerprint", func(t *testing.T) {
+		a := newObjectFromYAML[v1alpha1.KafkaSchema](t, yamlKafkaSchema)
+		a.Spec.CompatibilityLevel = ""
+		b := newObjectFromYAML[v1alpha1.KafkaSchema](t, yamlKafkaSchema)
+		b.Spec.CompatibilityLevel = kafkaschemaregistry.CompatibilityTypeBackward
+		require.NotEqual(t, fingerprintCompatLevel(a), fingerprintCompatLevel(b),
+			"setting a CompatibilityLevel must change the compat fingerprint")
+	})
+
+	t.Run("different CompatibilityLevels produce different fingerprints", func(t *testing.T) {
+		a := newObjectFromYAML[v1alpha1.KafkaSchema](t, yamlKafkaSchema)
+		a.Spec.CompatibilityLevel = kafkaschemaregistry.CompatibilityTypeBackward
+		b := newObjectFromYAML[v1alpha1.KafkaSchema](t, yamlKafkaSchema)
+		b.Spec.CompatibilityLevel = kafkaschemaregistry.CompatibilityTypeNone
+		require.NotEqual(t, fingerprintCompatLevel(a), fingerprintCompatLevel(b))
 	})
 }
 
