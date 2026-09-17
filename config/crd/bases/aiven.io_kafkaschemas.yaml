@@ -213,8 +213,12 @@ spec:
                     references are only supported for PROTOBUF and JSON schema
                     types
                   rule:
-                    "!has(self.references) || size(self.references) == 0 || self.schemaType
-                    in ['PROTOBUF', 'JSON']"
+                    "!has(self.references) || size(self.references) == 0 || (has(self.schemaType)
+                    && self.schemaType in ['PROTOBUF', 'JSON'])"
+                - message: schemaType is immutable, including adding or removing it
+                  rule:
+                    has(self.schemaType) == has(oldSelf.schemaType) && (!has(self.schemaType)
+                    || self.schemaType == oldSelf.schemaType)
             status:
               description: KafkaSchemaStatus defines the observed state of KafkaSchema
               properties:
