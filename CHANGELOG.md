@@ -2,6 +2,11 @@
 
 ## [MAJOR.MINOR.PATCH] - YYYY-MM-DD
 
+- Fix `KafkaACL` deleting an ACL it does not own. A resource whose first reconcile never
+  completed has no stored ACL ID, and deleting it resolved an ACL by topic, username and
+  permission alone, removing one created by hand or by another resource. The pre-v0.5.1 content
+  fallback is now limited to resources that were actually applied
+
 ## v0.48.0 - 2026-10-01
 
 - **BREAKING**: `ServiceUser` now applies `spec.authentication` when creating Aiven users and
