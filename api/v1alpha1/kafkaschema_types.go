@@ -8,8 +8,15 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 )
 
+// A transition rule on an optional field is skipped whenever the field is absent, so it does
+// not block adding or removing that field. Rules for optional immutable fields therefore
+// live on the spec, where has() can be applied to both self and oldSelf.
+// The per-field rules are kept as well: they are what the docs generator reads to mark a
+// field Immutable, and they give a precise error when only the value changes.
+
 // KafkaSchemaSpec defines the desired state of KafkaSchema
-// +kubebuilder:validation:XValidation:rule="!has(self.references) || size(self.references) == 0 || self.schemaType in ['PROTOBUF', 'JSON']",message="references are only supported for PROTOBUF and JSON schema types"
+// +kubebuilder:validation:XValidation:rule="!has(self.references) || size(self.references) == 0 || (has(self.schemaType) && self.schemaType in ['PROTOBUF', 'JSON'])",message="references are only supported for PROTOBUF and JSON schema types"
+// +kubebuilder:validation:XValidation:rule="has(self.schemaType) == has(oldSelf.schemaType) && (!has(self.schemaType) || self.schemaType == oldSelf.schemaType)",message="schemaType is immutable, including adding or removing it"
 type KafkaSchemaSpec struct {
 	ServiceDependant `json:",inline"`
 

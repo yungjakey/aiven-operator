@@ -6,9 +6,17 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// A transition rule on an optional field is skipped whenever the field is absent, so it does
+// not block adding or removing that field. Rules for optional immutable fields therefore
+// live on the spec, where has() can be applied to both self and oldSelf.
+// The per-field rules are kept as well: they are what the docs generator reads to mark a
+// field Immutable, and they give a precise error when only the value changes.
+
 // KafkaQuotaSpec defines the desired state of KafkaQuota
 // +kubebuilder:validation:XValidation:rule="has(self.user) || has(self.clientId)",message="At least one of user or clientId must be set"
 // +kubebuilder:validation:XValidation:rule="has(self.consumerByteRate) || has(self.producerByteRate) || has(self.requestPercentage)",message="At least one of consumerByteRate, producerByteRate or requestPercentage must be set"
+// +kubebuilder:validation:XValidation:rule="has(self.user) == has(oldSelf.user) && (!has(self.user) || self.user == oldSelf.user)",message="user is immutable, including adding or removing it"
+// +kubebuilder:validation:XValidation:rule="has(self.clientId) == has(oldSelf.clientId) && (!has(self.clientId) || self.clientId == oldSelf.clientId)",message="clientId is immutable, including adding or removing it"
 type KafkaQuotaSpec struct {
 	ServiceDependant `json:",inline"`
 

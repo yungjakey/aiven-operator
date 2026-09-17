@@ -144,6 +144,14 @@ spec:
                     At least one of consumerByteRate, producerByteRate or requestPercentage
                     must be set
                   rule: has(self.consumerByteRate) || has(self.producerByteRate) || has(self.requestPercentage)
+                - message: user is immutable, including adding or removing it
+                  rule:
+                    has(self.user) == has(oldSelf.user) && (!has(self.user) || self.user
+                    == oldSelf.user)
+                - message: clientId is immutable, including adding or removing it
+                  rule:
+                    has(self.clientId) == has(oldSelf.clientId) && (!has(self.clientId)
+                    || self.clientId == oldSelf.clientId)
             status:
               description: KafkaQuotaStatus defines the observed state of KafkaQuota
               properties:
