@@ -4,6 +4,16 @@
 
 - Add up to 10% jitter to the periodic reconcile interval.
 - Add kind: `ServiceUserRotation` to manage a rotating pool of service users behind a stable connection Secret.
+- Fix `KafkaTopic` never detecting drift: `partitions`, `replication`, `tags` and the
+  configuration keys the topic list reports are now compared against the spec, so a topic changed
+  outside the operator is brought back in line instead of being reported as up to date.
+  Configuration keys outside that set are still applied without being checked
+- Fix `KafkaTopic` attempting to create topics on a powered-off service, or on one that reports no
+  nodes, which surfaced as a hard error and exponential backoff instead of a quiet requeue
+- Fix `KafkaTopic` staying marked as running after the topic leaves the `ACTIVE` state, which kept
+  `IsReadyToUse` true and released resources waiting on it
+- Fix `KafkaTopic` reconciles failing with `context canceled` when another topic in the same Kafka
+  service had its reconcile cancelled while they shared a topic-list call
 - Change `Kafka` field `userConfig.karapace_version`: pattern ~~`^[0-9]+\.[0-9]+\.[0-9]+$`~~
 - Remove the character pattern from `KafkaTopic` `tags` key and value; only the length limits remain.
 - Add `Valkey` field `userConfig.valkey_active_defrag_ignore_bytes`, type `integer`: Minimum amount of
