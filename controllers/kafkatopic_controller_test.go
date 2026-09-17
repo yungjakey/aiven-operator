@@ -9,7 +9,6 @@ import (
 	avngen "github.com/aiven/go-client-codegen"
 	"github.com/aiven/go-client-codegen/handler/kafkatopic"
 	"github.com/aiven/go-client-codegen/handler/service"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -723,11 +722,12 @@ func TestKafkaTopicObserveDetachesSharedListFromCaller(t *testing.T) {
 		RunAndReturn(func(callCtx context.Context, _, _ string) ([]kafkatopic.TopicOut, error) {
 			cancel() // the reconcile that owns this call goes away mid-flight
 
-			assert.NoError(t, callCtx.Err(), "the shared call inherited the owning reconcile's cancellation")
+			// Runs on the test goroutine: Observe is called directly below.
+			require.NoError(t, callCtx.Err(), "the shared call inherited the owning reconcile's cancellation")
 
 			deadline, ok := callCtx.Deadline()
-			assert.True(t, ok, "the detached call has no deadline of its own")
-			assert.WithinDuration(t, time.Now().Add(kafkaTopicListTimeout), deadline, time.Minute)
+			require.True(t, ok, "the detached call has no deadline of its own")
+			require.WithinDuration(t, time.Now().Add(kafkaTopicListTimeout), deadline, time.Minute)
 
 			return []kafkatopic.TopicOut{topicMatchingSpec(topic, kafkatopic.TopicStateTypeActive)}, nil
 		}).Once()
