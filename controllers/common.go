@@ -118,20 +118,30 @@ func getServiceIfOperational(ctx context.Context, avnGen avngen.Client, project,
 		return nil, err
 	}
 
-	switch s.State {
+	if err := serviceStateError(s.State, project, serviceName); err != nil {
+		return nil, err
+	}
+
+	return s, nil
+}
+
+// serviceStateError classifies a service state for the reconciler, returning nil when the
+// service can accept operations.
+func serviceStateError(state service.ServiceStateType, project, serviceName string) error {
+	switch state {
 	case service.ServiceStateTypeRebalancing, service.ServiceStateTypeRunning:
 		// Running means the service is fully operational.
 		// Rebalancing doesn't block most of the operations.
 		// But depending on the service type and the operation, additional checks may be needed.
-		return s, nil
+		return nil
 	case service.ServiceStateTypePoweroff:
 		// If the service is powered off, returns an error,
 		// so that Kube won't infinitely retry the Aiven API.
-		return nil, fmt.Errorf("%w: %s/%s", errServicePoweredOff, project, serviceName)
+		return fmt.Errorf("%w: %s/%s", errServicePoweredOff, project, serviceName)
 	}
 
 	// Must be an intermediate state, e.g. rebuilding, etc.
-	return nil, fmt.Errorf("%w: service %s/%s is not yet operational", errPreconditionNotMet, project, serviceName)
+	return fmt.Errorf("%w: service %s/%s is not yet operational", errPreconditionNotMet, project, serviceName)
 }
 
 func getInitializedCondition(reason, message string) metav1.Condition {

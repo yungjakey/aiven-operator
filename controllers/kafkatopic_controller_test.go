@@ -1,8 +1,10 @@
 package controllers
 
 import (
+	"context"
 	"slices"
 	"testing"
+	"time"
 
 	avngen "github.com/aiven/go-client-codegen"
 	"github.com/aiven/go-client-codegen/handler/kafkatopic"
@@ -10,6 +12,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -40,6 +43,28 @@ spec:
     cleanup_policy: delete
     retention_bytes: 123
 `
+
+// topicMatchingSpec builds the topic Aiven would report for a KafkaTopic that is fully applied,
+// so that Observe sees no drift.
+func topicMatchingSpec(topic *v1alpha1.KafkaTopic, state kafkatopic.TopicStateType) kafkatopic.TopicOut {
+	out := kafkatopic.TopicOut{
+		TopicName:   topic.GetTopicName(),
+		State:       state,
+		Partitions:  topic.Spec.Partitions,
+		Replication: topic.Spec.Replication,
+	}
+	for _, t := range topic.Spec.Tags {
+		out.Tags = append(out.Tags, kafkatopic.TagOut{Key: t.Key, Value: t.Value})
+	}
+	if cfg := topic.Spec.Config; cfg != nil {
+		out.CleanupPolicy = string(cfg.CleanupPolicy)
+		out.MinInsyncReplicas = fromAnyPointer(cfg.MinInsyncReplicas)
+		out.RetentionBytes = fromAnyPointer(cfg.RetentionBytes)
+		out.DisklessEnable = cfg.DisklessEnable
+		out.RemoteStorageEnable = cfg.RemoteStorageEnable
+	}
+	return out
+}
 
 func Test_newKafkaTopicReconciler(t *testing.T) {
 	t.Parallel()
@@ -118,6 +143,7 @@ func TestKafkaTopicReconciler(t *testing.T) {
 		avn.EXPECT().
 			ServiceGet(mock.Anything, topic.Spec.Project, topic.Spec.ServiceName).
 			Return(&service.ServiceGetOut{
+				State: service.ServiceStateTypeRunning,
 				NodeStates: []service.NodeStateOut{
 					{State: service.NodeStateTypeRunning},
 					{State: service.NodeStateTypeRunning},
@@ -158,6 +184,7 @@ func TestKafkaTopicReconciler(t *testing.T) {
 		avn.EXPECT().
 			ServiceGet(mock.Anything, topic.Spec.Project, topic.Spec.ServiceName).
 			Return(&service.ServiceGetOut{
+				State: service.ServiceStateTypeRunning,
 				NodeStates: []service.NodeStateOut{
 					{State: service.NodeStateTypeRunning},
 					{State: service.NodeStateTypeRunning},
@@ -191,6 +218,7 @@ func TestKafkaTopicReconciler(t *testing.T) {
 		avn.EXPECT().
 			ServiceGet(mock.Anything, topic.Spec.Project, topic.Spec.ServiceName).
 			Return(&service.ServiceGetOut{
+				State: service.ServiceStateTypeRunning,
 				NodeStates: []service.NodeStateOut{
 					{State: service.NodeStateTypeRunning},
 					{State: service.NodeStateTypeRunning},
@@ -224,6 +252,7 @@ func TestKafkaTopicReconciler(t *testing.T) {
 		avn.EXPECT().
 			ServiceGet(mock.Anything, topic.Spec.Project, topic.Spec.ServiceName).
 			Return(&service.ServiceGetOut{
+				State: service.ServiceStateTypeRunning,
 				NodeStates: []service.NodeStateOut{
 					{State: service.NodeStateTypeRunning},
 					{State: service.NodeStateTypeRunning},
@@ -232,7 +261,7 @@ func TestKafkaTopicReconciler(t *testing.T) {
 		avn.EXPECT().
 			ServiceKafkaTopicList(mock.Anything, topic.Spec.Project, topic.Spec.ServiceName).
 			Return([]kafkatopic.TopicOut{
-				{TopicName: topic.GetTopicName(), State: kafkatopic.TopicStateTypeConfiguring},
+				topicMatchingSpec(topic, kafkatopic.TopicStateTypeConfiguring),
 			}, nil).Once()
 
 		r, res, err := runScenario(t, topic, avn)
@@ -243,6 +272,80 @@ func TestKafkaTopicReconciler(t *testing.T) {
 		require.NoError(t, r.Get(t.Context(), types.NamespacedName{Name: topic.Name, Namespace: topic.Namespace}, got))
 		require.Equal(t, kafkatopic.TopicStateTypeConfiguring, got.Status.State)
 		require.NotContains(t, got.Annotations, instanceIsRunningAnnotation)
+	})
+
+	t.Run("Repairs KafkaTopic that drifted on Aiven", func(t *testing.T) {
+		topic := newObjectFromYAML[v1alpha1.KafkaTopic](t, yamlKafkaTopic)
+		topic.Generation = 1
+		topic.Spec.Project = "test-project-drift"
+		topic.Spec.ServiceName = "test-service-drift"
+		// The generation was processed, so nothing about the manifest changed: the topic was
+		// altered outside the operator.
+		topic.Annotations = map[string]string{
+			processedGenerationAnnotation: "1",
+			instanceIsRunningAnnotation:   "true",
+		}
+
+		drifted := topicMatchingSpec(topic, kafkatopic.TopicStateTypeActive)
+		drifted.Partitions = 1
+
+		avn := avngen.NewMockClient(t)
+		avn.EXPECT().
+			ServiceGet(mock.Anything, topic.Spec.Project, topic.Spec.ServiceName).
+			Return(&service.ServiceGetOut{
+				State:      service.ServiceStateTypeRunning,
+				NodeStates: []service.NodeStateOut{{State: service.NodeStateTypeRunning}, {State: service.NodeStateTypeRunning}},
+			}, nil).Once()
+		avn.EXPECT().
+			ServiceKafkaTopicList(mock.Anything, topic.Spec.Project, topic.Spec.ServiceName).
+			Return([]kafkatopic.TopicOut{drifted}, nil).Once()
+		avn.EXPECT().
+			ServiceKafkaTopicUpdate(mock.Anything, topic.Spec.Project, topic.Spec.ServiceName, topic.GetTopicName(),
+				mock.MatchedBy(func(in *kafkatopic.ServiceKafkaTopicUpdateIn) bool {
+					return *in.Partitions == topic.Spec.Partitions
+				})).Return(nil).Once()
+
+		_, res, err := runScenario(t, topic, avn)
+		require.NoError(t, err)
+		require.Equal(t, ctrlruntime.Result{RequeueAfter: requeueTimeout}, res)
+	})
+
+	t.Run("Clears the running marker when KafkaTopic leaves ACTIVE", func(t *testing.T) {
+		topic := newObjectFromYAML[v1alpha1.KafkaTopic](t, yamlKafkaTopic)
+		topic.Generation = 1
+		topic.Spec.Project = "test-project-left-active"
+		topic.Spec.ServiceName = "test-service-left-active"
+		topic.Annotations = map[string]string{
+			processedGenerationAnnotation: "1",
+			instanceIsRunningAnnotation:   "true", // set by an earlier, ACTIVE observation
+		}
+
+		avn := avngen.NewMockClient(t)
+		avn.EXPECT().
+			ServiceGet(mock.Anything, topic.Spec.Project, topic.Spec.ServiceName).
+			Return(&service.ServiceGetOut{
+				State:      service.ServiceStateTypeRunning,
+				NodeStates: []service.NodeStateOut{{State: service.NodeStateTypeRunning}, {State: service.NodeStateTypeRunning}},
+			}, nil).Once()
+		avn.EXPECT().
+			ServiceKafkaTopicList(mock.Anything, topic.Spec.Project, topic.Spec.ServiceName).
+			Return([]kafkatopic.TopicOut{topicMatchingSpec(topic, kafkatopic.TopicStateTypeConfiguring)}, nil).Once()
+
+		r, res, err := runScenario(t, topic, avn)
+		require.NoError(t, err)
+		// Not ready any more, so the short requeue rather than the poll interval.
+		require.Equal(t, ctrlruntime.Result{RequeueAfter: requeueTimeout}, res)
+
+		got := &v1alpha1.KafkaTopic{}
+		require.NoError(t, r.Get(t.Context(), types.NamespacedName{Name: topic.Name, Namespace: topic.Namespace}, got))
+		require.Equal(t, kafkatopic.TopicStateTypeConfiguring, got.Status.State)
+		require.NotContains(t, got.Annotations, instanceIsRunningAnnotation)
+		require.False(t, IsReadyToUse(got))
+
+		running := meta.FindStatusCondition(got.Status.Conditions, conditionTypeRunning)
+		require.NotNil(t, running)
+		require.Equal(t, metav1.ConditionFalse, running.Status)
+		require.Contains(t, running.Message, string(kafkatopic.TopicStateTypeConfiguring))
 	})
 
 	t.Run("Marks KafkaTopic running when it becomes ACTIVE", func(t *testing.T) {
@@ -256,6 +359,7 @@ func TestKafkaTopicReconciler(t *testing.T) {
 		avn.EXPECT().
 			ServiceGet(mock.Anything, topic.Spec.Project, topic.Spec.ServiceName).
 			Return(&service.ServiceGetOut{
+				State: service.ServiceStateTypeRunning,
 				NodeStates: []service.NodeStateOut{
 					{State: service.NodeStateTypeRunning},
 					{State: service.NodeStateTypeRunning},
@@ -264,7 +368,7 @@ func TestKafkaTopicReconciler(t *testing.T) {
 		avn.EXPECT().
 			ServiceKafkaTopicList(mock.Anything, topic.Spec.Project, topic.Spec.ServiceName).
 			Return([]kafkatopic.TopicOut{
-				{TopicName: topic.GetTopicName(), State: kafkatopic.TopicStateTypeActive},
+				topicMatchingSpec(topic, kafkatopic.TopicStateTypeActive),
 			}, nil).Once()
 
 		r, res, err := runScenario(t, topic, avn)
@@ -291,6 +395,7 @@ func TestKafkaTopicReconciler(t *testing.T) {
 		avn.EXPECT().
 			ServiceGet(mock.Anything, topic.Spec.Project, topic.Spec.ServiceName).
 			Return(&service.ServiceGetOut{
+				State: service.ServiceStateTypeRunning,
 				NodeStates: []service.NodeStateOut{
 					{State: service.NodeStateTypeRunning},
 					{State: service.NodeStateTypeRunning},
@@ -299,7 +404,7 @@ func TestKafkaTopicReconciler(t *testing.T) {
 		avn.EXPECT().
 			ServiceKafkaTopicList(mock.Anything, topic.Spec.Project, topic.Spec.ServiceName).
 			Return([]kafkatopic.TopicOut{
-				{TopicName: topic.GetTopicName(), State: kafkatopic.TopicStateTypeActive},
+				topicMatchingSpec(topic, kafkatopic.TopicStateTypeActive),
 			}, nil).Once()
 		avn.EXPECT().
 			ServiceKafkaTopicUpdate(mock.Anything, topic.Spec.Project, topic.Spec.ServiceName, topic.GetTopicName(), mock.MatchedBy(func(in *kafkatopic.ServiceKafkaTopicUpdateIn) bool {
@@ -331,6 +436,7 @@ func TestKafkaTopicReconciler(t *testing.T) {
 		avn.EXPECT().
 			ServiceGet(mock.Anything, topic.Spec.Project, topic.Spec.ServiceName).
 			Return(&service.ServiceGetOut{
+				State: service.ServiceStateTypeRunning,
 				NodeStates: []service.NodeStateOut{
 					{State: service.NodeStateTypeRunning},
 					{State: service.NodeStateTypeRunning},
@@ -370,6 +476,7 @@ func TestKafkaTopicReconciler(t *testing.T) {
 		avn.EXPECT().
 			ServiceGet(mock.Anything, topic.Spec.Project, topic.Spec.ServiceName).
 			Return(&service.ServiceGetOut{
+				State: service.ServiceStateTypeRunning,
 				NodeStates: []service.NodeStateOut{
 					{State: service.NodeStateTypeRunning},
 					{State: service.NodeStateTypeRunning},
@@ -435,4 +542,226 @@ func TestKafkaTopicReconciler(t *testing.T) {
 		err = r.Get(t.Context(), types.NamespacedName{Name: topic.Name, Namespace: topic.Namespace}, got)
 		require.True(t, apierrors.IsNotFound(err))
 	})
+}
+
+func TestKafkaTopicCheckPreconditions(t *testing.T) {
+	t.Parallel()
+
+	nodes := func(n int) []service.NodeStateOut {
+		out := make([]service.NodeStateOut, 0, n)
+		for range n {
+			out = append(out, service.NodeStateOut{State: service.NodeStateTypeRunning})
+		}
+		return out
+	}
+
+	for _, tc := range []struct {
+		name    string
+		svc     *service.ServiceGetOut
+		wantErr error
+	}{
+		{
+			name: "operational service with enough nodes",
+			svc:  &service.ServiceGetOut{State: service.ServiceStateTypeRunning, NodeStates: nodes(3)},
+		},
+		{
+			name: "rebalancing service is still usable",
+			svc:  &service.ServiceGetOut{State: service.ServiceStateTypeRebalancing, NodeStates: nodes(2)},
+		},
+		{
+			// min(len(NodeStates), replication) is 0 when the list is empty, so the
+			// node comparison passed vacuously and the topic create went ahead.
+			name:    "powered-off service reports no nodes",
+			svc:     &service.ServiceGetOut{State: service.ServiceStateTypePoweroff},
+			wantErr: errServicePoweredOff,
+		},
+		{
+			name:    "running service that reports no nodes yet",
+			svc:     &service.ServiceGetOut{State: service.ServiceStateTypeRunning},
+			wantErr: errPreconditionNotMet,
+		},
+		{
+			name:    "rebuilding service",
+			svc:     &service.ServiceGetOut{State: service.ServiceStateTypeRebuilding, NodeStates: nodes(3)},
+			wantErr: errPreconditionNotMet,
+		},
+		{
+			name:    "not enough nodes running for the replication factor",
+			svc:     &service.ServiceGetOut{State: service.ServiceStateTypeRunning, NodeStates: []service.NodeStateOut{{State: service.NodeStateTypeRunning}, {State: service.NodeStateTypeLeaving}}},
+			wantErr: errPreconditionNotMet,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			topic := newObjectFromYAML[v1alpha1.KafkaTopic](t, yamlKafkaTopic)
+			avn := avngen.NewMockClient(t)
+			avn.EXPECT().
+				ServiceGet(mock.Anything, topic.Spec.Project, topic.Spec.ServiceName).
+				Return(tc.svc, nil).Once()
+
+			err := (&KafkaTopicController{avnGen: avn}).checkPreconditions(t.Context(), topic)
+			if tc.wantErr == nil {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorIs(t, err, tc.wantErr)
+		})
+	}
+}
+
+func TestKafkaTopicMatchesSpec(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		// spec runs first, then the remote topic is derived from the resulting spec, then
+		// remote applies the drift under test.
+		spec   func(topic *v1alpha1.KafkaTopic)
+		remote func(remote *kafkatopic.TopicOut)
+		want   bool
+	}{
+		{name: "identical", want: true},
+		{
+			name:   "partitions changed on Aiven",
+			remote: func(r *kafkatopic.TopicOut) { r.Partitions = 1 },
+		},
+		{
+			name:   "replication changed on Aiven",
+			remote: func(r *kafkatopic.TopicOut) { r.Replication = 3 },
+		},
+		{
+			name:   "tag value changed on Aiven",
+			remote: func(r *kafkatopic.TopicOut) { r.Tags[0].Value = "prod" },
+		},
+		{
+			name:   "tag added on Aiven",
+			remote: func(r *kafkatopic.TopicOut) { r.Tags = append(r.Tags, kafkatopic.TagOut{Key: "extra", Value: "x"}) },
+		},
+		{
+			name:   "tag removed on Aiven",
+			remote: func(r *kafkatopic.TopicOut) { r.Tags = nil },
+		},
+		{
+			name:   "retention_bytes changed on Aiven",
+			remote: func(r *kafkatopic.TopicOut) { r.RetentionBytes = 999 },
+		},
+		{
+			name:   "cleanup_policy changed on Aiven",
+			remote: func(r *kafkatopic.TopicOut) { r.CleanupPolicy = "compact" },
+		},
+		{
+			name:   "min_insync_replicas changed on Aiven",
+			spec:   func(topic *v1alpha1.KafkaTopic) { topic.Spec.Config.MinInsyncReplicas = anyPointerTo(2) },
+			remote: func(r *kafkatopic.TopicOut) { r.MinInsyncReplicas = 1 },
+		},
+		{
+			name:   "remote_storage_enable changed on Aiven",
+			spec:   func(topic *v1alpha1.KafkaTopic) { topic.Spec.Config.RemoteStorageEnable = anyPointerTo(true) },
+			remote: func(r *kafkatopic.TopicOut) { r.RemoteStorageEnable = anyPointerTo(false) },
+		},
+		{
+			// The update payload omits keys the spec does not set, so reporting drift on
+			// one of them would never converge.
+			name:   "config key the spec does not set",
+			spec:   func(topic *v1alpha1.KafkaTopic) { topic.Spec.Config.MinInsyncReplicas = nil },
+			remote: func(r *kafkatopic.TopicOut) { r.MinInsyncReplicas = 2 },
+			want:   true,
+		},
+		{
+			name:   "spec sets no config at all",
+			spec:   func(topic *v1alpha1.KafkaTopic) { topic.Spec.Config = nil },
+			remote: func(r *kafkatopic.TopicOut) { r.RetentionBytes = 999 },
+			want:   true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			topic := newObjectFromYAML[v1alpha1.KafkaTopic](t, yamlKafkaTopic)
+			if tc.spec != nil {
+				tc.spec(topic)
+			}
+
+			remote := topicMatchingSpec(topic, kafkatopic.TopicStateTypeActive)
+			require.True(t, topicMatchesSpec(topic, remote), "the derived remote topic must match before drift is applied")
+
+			if tc.remote != nil {
+				tc.remote(&remote)
+			}
+
+			require.Equal(t, tc.want, topicMatchesSpec(topic, remote))
+		})
+	}
+}
+
+func anyPointerTo[T any](v T) *T { return &v }
+
+// Topics in one Kafka service share a single ServiceKafkaTopicList call. Its response is handed
+// to every reconcile coalesced onto that key, so the call must not carry the cancellation of
+// whichever reconcile happened to win the race: otherwise one cancelled reconcile fails all the
+// others, up to MaxConcurrentReconciles of them.
+func TestKafkaTopicObserveDetachesSharedListFromCaller(t *testing.T) {
+	t.Parallel()
+
+	topic := newObjectFromYAML[v1alpha1.KafkaTopic](t, yamlKafkaTopic)
+	topic.Spec.Project = "test-project-detached"
+	topic.Spec.ServiceName = "test-service-detached"
+
+	avn := avngen.NewMockClient(t)
+	avn.EXPECT().
+		ServiceGet(mock.Anything, topic.Spec.Project, topic.Spec.ServiceName).
+		Return(&service.ServiceGetOut{
+			State:      service.ServiceStateTypeRunning,
+			NodeStates: []service.NodeStateOut{{State: service.NodeStateTypeRunning}, {State: service.NodeStateTypeRunning}},
+		}, nil).Once()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	avn.EXPECT().
+		ServiceKafkaTopicList(mock.Anything, topic.Spec.Project, topic.Spec.ServiceName).
+		RunAndReturn(func(callCtx context.Context, _, _ string) ([]kafkatopic.TopicOut, error) {
+			cancel() // the reconcile that owns this call goes away mid-flight
+
+			// Runs on the test goroutine: Observe is called directly below.
+			require.NoError(t, callCtx.Err(), "the shared call inherited the owning reconcile's cancellation")
+
+			deadline, ok := callCtx.Deadline()
+			require.True(t, ok, "the detached call has no deadline of its own")
+			require.WithinDuration(t, time.Now().Add(kafkaTopicListTimeout), deadline, time.Minute)
+
+			return []kafkatopic.TopicOut{topicMatchingSpec(topic, kafkatopic.TopicStateTypeActive)}, nil
+		}).Once()
+
+	// This caller was the one cancelled, so it still bails out; the point is that the call it
+	// was carrying completed for everyone else.
+	_, err := (&KafkaTopicController{avnGen: avn}).Observe(ctx, topic)
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+// A reconcile whose own context is done must not act on the shared response.
+func TestKafkaTopicObserveStopsOnOwnCancellation(t *testing.T) {
+	t.Parallel()
+
+	topic := newObjectFromYAML[v1alpha1.KafkaTopic](t, yamlKafkaTopic)
+	topic.Spec.Project = "test-project-self-cancel"
+	topic.Spec.ServiceName = "test-service-self-cancel"
+
+	avn := avngen.NewMockClient(t)
+	avn.EXPECT().
+		ServiceGet(mock.Anything, topic.Spec.Project, topic.Spec.ServiceName).
+		Return(&service.ServiceGetOut{
+			State:      service.ServiceStateTypeRunning,
+			NodeStates: []service.NodeStateOut{{State: service.NodeStateTypeRunning}, {State: service.NodeStateTypeRunning}},
+		}, nil).Once()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	avn.EXPECT().
+		ServiceKafkaTopicList(mock.Anything, topic.Spec.Project, topic.Spec.ServiceName).
+		RunAndReturn(func(context.Context, string, string) ([]kafkatopic.TopicOut, error) {
+			cancel() // cancelled while the call is in flight
+			return []kafkatopic.TopicOut{topicMatchingSpec(topic, kafkatopic.TopicStateTypeActive)}, nil
+		}).Once()
+
+	_, err := (&KafkaTopicController{avnGen: avn}).Observe(ctx, topic)
+	require.ErrorIs(t, err, context.Canceled)
 }

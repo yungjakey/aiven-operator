@@ -5,6 +5,8 @@ package controllers
 import (
 	"context"
 	"fmt"
+	"maps"
+	"time"
 
 	avngen "github.com/aiven/go-client-codegen"
 	"github.com/aiven/go-client-codegen/handler/kafkatopic"
@@ -19,6 +21,10 @@ import (
 )
 
 const kafkaTopicMaxConcurrentReconciles = 20
+
+// kafkaTopicListTimeout bounds the shared topic-list call. The call is detached from any
+// single reconcile's context, so it needs a deadline of its own.
+const kafkaTopicListTimeout = 30 * time.Second
 
 func newKafkaTopicReconciler(c Controller) reconcilerType {
 	return newManagedReconciler(
@@ -56,8 +62,19 @@ func (r *KafkaTopicController) Observe(ctx context.Context, topic *v1alpha1.Kafk
 
 	// let requeuing handle retries
 	result, err, _ := topicListCallGroup.Do(callKey, func() (any, error) {
-		return r.avnGen.ServiceKafkaTopicList(ctx, topic.Spec.Project, topic.Spec.ServiceName)
+		// The response is handed to every reconcile coalesced onto this key, so the call must
+		// not inherit the cancellation of whichever one happened to win the race. Context
+		// values, the logger among them, are kept.
+		callCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), kafkaTopicListTimeout)
+		defer cancel()
+
+		return r.avnGen.ServiceKafkaTopicList(callCtx, topic.Spec.Project, topic.Spec.ServiceName)
 	})
+
+	// A caller whose own context is done stops here rather than acting on a shared response.
+	if err := ctx.Err(); err != nil {
+		return Observation{}, err
+	}
 
 	switch {
 	case isServerError(err):
@@ -84,16 +101,19 @@ func (r *KafkaTopicController) Observe(ctx context.Context, topic *v1alpha1.Kafk
 
 		topic.Status.State = topicInfo.State
 		if topic.Status.State == kafkatopic.TopicStateTypeActive {
+			markInstanceRunning(topic)
+		} else {
+			// The topic left ACTIVE, so it is no longer ready for use. Leaving the marker in
+			// place would keep IsReadyToUse true and release anything waiting on this topic.
+			delete(topic.GetAnnotations(), instanceIsRunningAnnotation)
 			meta.SetStatusCondition(&topic.Status.Conditions,
-				getRunningCondition(metav1.ConditionTrue, "CheckRunning",
-					"Instance is running on Aiven side"))
-
-			metav1.SetMetaDataAnnotation(&topic.ObjectMeta, instanceIsRunningAnnotation, "true")
+				getRunningCondition(metav1.ConditionFalse, "CheckRunning",
+					fmt.Sprintf("Instance is in state %s on Aiven side", topic.Status.State)))
 		}
 
 		return Observation{
 			ResourceExists:   true,
-			ResourceUpToDate: hasLatestGeneration(topic),
+			ResourceUpToDate: hasLatestGeneration(topic) && topicMatchesSpec(topic, topicInfo),
 		}, nil
 	}
 
@@ -173,12 +193,25 @@ func (r *KafkaTopicController) Delete(ctx context.Context, topic *v1alpha1.Kafka
 }
 
 func (r *KafkaTopicController) checkPreconditions(ctx context.Context, topic *v1alpha1.KafkaTopic) error {
+	// Unlike the other Kafka controllers this one does not use getServiceIfOperational, to avoid
+	// paying for include_secrets on every topic: there can be thousands of them per service.
 	s, err := r.avnGen.ServiceGet(ctx, topic.Spec.Project, topic.Spec.ServiceName)
 	if isNotFound(err) {
 		return errPreconditionNotMet
 	}
 	if err != nil {
 		return err
+	}
+
+	if err := serviceStateError(s.State, topic.Spec.Project, topic.Spec.ServiceName); err != nil {
+		return err
+	}
+
+	// A service can be RUNNING and still report no usable nodes, for instance while it is being
+	// rebuilt. Guarding this explicitly also keeps the comparison below from passing vacuously.
+	if len(s.NodeStates) == 0 {
+		return fmt.Errorf("%w: service %s/%s reports no nodes",
+			errPreconditionNotMet, topic.Spec.Project, topic.Spec.ServiceName)
 	}
 
 	running := 0
@@ -191,10 +224,69 @@ func (r *KafkaTopicController) checkPreconditions(ctx context.Context, topic *v1
 	// Replication factor requires enough nodes running.
 	// But we want to get the backend validation error if the value is too high.
 	if running < min(len(s.NodeStates), topic.Spec.Replication) {
-		return errPreconditionNotMet
+		return fmt.Errorf("%w: service %s/%s has %d of %d nodes running",
+			errPreconditionNotMet, topic.Spec.Project, topic.Spec.ServiceName, running, len(s.NodeStates))
 	}
 
 	return nil
+}
+
+// topicMatchesSpec reports whether the topic Aiven returned still matches the spec.
+//
+// Only what ServiceKafkaTopicList already returns is compared. A full configuration diff would
+// need a ServiceKafkaTopicGet per topic on every poll, which is the request pattern that made
+// large services slow to reconcile (aiven/aiven-operator#974). Configuration keys outside that
+// set are therefore still applied blindly and not checked for drift.
+func topicMatchesSpec(topic *v1alpha1.KafkaTopic, remote kafkatopic.TopicOut) bool {
+	if remote.Partitions != topic.Spec.Partitions || remote.Replication != topic.Spec.Replication {
+		return false
+	}
+
+	if !topicTagsMatch(topic.Spec.Tags, remote.Tags) {
+		return false
+	}
+
+	cfg := topic.Spec.Config
+	if cfg == nil {
+		return true
+	}
+
+	// Only keys the spec actually sets are compared: an unset key is left to Aiven, and the
+	// update payload omits it, so reporting drift on it would never converge.
+	switch {
+	case cfg.CleanupPolicy != "" && string(cfg.CleanupPolicy) != remote.CleanupPolicy:
+		return false
+	case cfg.MinInsyncReplicas != nil && *cfg.MinInsyncReplicas != remote.MinInsyncReplicas:
+		return false
+	case cfg.RetentionBytes != nil && *cfg.RetentionBytes != remote.RetentionBytes:
+		return false
+	case cfg.DisklessEnable != nil && fromAnyPointer(cfg.DisklessEnable) != fromAnyPointer(remote.DisklessEnable):
+		return false
+	case cfg.RemoteStorageEnable != nil && fromAnyPointer(cfg.RemoteStorageEnable) != fromAnyPointer(remote.RemoteStorageEnable):
+		return false
+	}
+
+	return true
+}
+
+// topicTagsMatch compares spec tags with the tags Aiven reports. Tags are fully managed: the
+// update payload always carries the complete set, so an extra tag on Aiven is drift.
+func topicTagsMatch(spec []v1alpha1.KafkaTopicTag, remote []kafkatopic.TagOut) bool {
+	if len(spec) != len(remote) {
+		return false
+	}
+
+	want := make(map[string]string, len(spec))
+	for _, t := range spec {
+		want[t.Key] = t.Value
+	}
+
+	got := make(map[string]string, len(remote))
+	for _, t := range remote {
+		got[t.Key] = t.Value
+	}
+
+	return maps.Equal(want, got)
 }
 
 func convertKafkaTopicConfig(topic *v1alpha1.KafkaTopic) *kafkatopic.ConfigIn {
