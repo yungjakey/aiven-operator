@@ -7,7 +7,14 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// A transition rule on an optional field is skipped whenever the field is absent, so it does
+// not block adding or removing that field. Rules for optional immutable fields therefore
+// live on the spec, where has() can be applied to both self and oldSelf.
+// The per-field rules are kept as well: they are what the docs generator reads to mark a
+// field Immutable, and they give a precise error when only the value changes.
+
 // KafkaTopicSpec defines the desired state of KafkaTopic
+// +kubebuilder:validation:XValidation:rule="has(self.topicName) == has(oldSelf.topicName) && (!has(self.topicName) || self.topicName == oldSelf.topicName)",message="topicName is immutable, including adding or removing it"
 type KafkaTopicSpec struct {
 	ServiceDependant `json:",inline"`
 

@@ -362,6 +362,11 @@ spec:
                 - replication
                 - serviceName
               type: object
+              x-kubernetes-validations:
+                - message: topicName is immutable, including adding or removing it
+                  rule:
+                    has(self.topicName) == has(oldSelf.topicName) && (!has(self.topicName)
+                    || self.topicName == oldSelf.topicName)
             status:
               description: KafkaTopicStatus defines the observed state of KafkaTopic
               properties:
