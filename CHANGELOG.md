@@ -4,6 +4,10 @@
 
 - Add up to 10% jitter to the periodic reconcile interval.
 - Add kind: `ServiceUserRotation` to manage a rotating pool of service users behind a stable connection Secret.
+- Fix `KafkaACL` deleting an ACL it does not own. A resource whose first reconcile never
+  completed has no stored ACL ID, and deleting it resolved an ACL by topic, username and
+  permission alone, removing one created by hand or by another resource. The pre-v0.5.1 content
+  fallback is now limited to resources that were actually applied
 - Change `Kafka` field `userConfig.karapace_version`: pattern ~~`^[0-9]+\.[0-9]+\.[0-9]+$`~~
 - Remove the character pattern from `KafkaTopic` `tags` key and value; only the length limits remain.
 - Add `Valkey` field `userConfig.valkey_active_defrag_ignore_bytes`, type `integer`: Minimum amount of

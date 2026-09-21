@@ -102,8 +102,9 @@ func (r *KafkaACLController) applyACL(ctx context.Context, acl *v1alpha1.KafkaAC
 
 	// Reset the old ID and resolve the newly created one.
 	// The server doesn't return the ACL we created, but the list of all ACLs currently defined.
+	// This is the one place content matching is unambiguous: the ACL was just added here.
 	acl.Status.ID = ""
-	acl.Status.ID, err = r.getID(ctx, acl)
+	acl.Status.ID, err = r.findIDByContent(ctx, acl)
 	return err
 }
 
@@ -128,6 +129,14 @@ func (r *KafkaACLController) getID(ctx context.Context, acl *v1alpha1.KafkaACL) 
 	// The rest of this function tries to guess it filtering the list.
 	if acl.Status.ID != "" {
 		return acl.Status.ID, nil
+	}
+
+	// A CR that was never applied owns no ACL, so there is nothing to resolve. Matching on
+	// content alone would pick up an entry created by hand or by another CR and hand it over
+	// to the caller to delete. Observe adopts a content match deliberately and records its ID;
+	// reaching here without one means that never happened.
+	if !wasEverApplied(acl) {
+		return "", NewNotFound(fmt.Sprintf("Kafka ACL %q was never created by this resource", acl.Name))
 	}
 
 	// For old ACLs only
