@@ -81,6 +81,14 @@ func (r *ProjectVPCController) Observe(ctx context.Context, projectVPC *v1alpha1
 		return Observation{}, fmt.Errorf("cannot get project VPC: %w", err)
 	}
 
+	if isVPCGone(avnVpc.State) {
+		// Deleted outside the operator: stop advertising it and replace it once it's gone.
+		projectVPC.Status.State = avnVpc.State
+		projectVPC.Status.ID = ""
+		markInstanceNotReconciled(projectVPC)
+		return r.Observe(ctx, projectVPC)
+	}
+
 	return r.observeState(projectVPC, avnVpc.State), nil
 }
 
