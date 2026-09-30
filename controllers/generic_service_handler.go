@@ -202,11 +202,25 @@ func (h *genericServiceHandler) delete(ctx context.Context, avnGen avngen.Client
 	//
 	// Note: the guard above already verifies that spec.terminationProtection is not true,
 	// so this only fires when the user has explicitly disabled or omitted TP.
-	terminationProtection := false
-	if _, err := avnGen.ServiceUpdate(ctx, spec.Project, o.getObjectMeta().Name, &service.ServiceUpdateIn{
-		TerminationProtection: &terminationProtection,
-	}); err != nil && !isNotFound(err) {
-		return false, fmt.Errorf("failed to disable termination protection before deletion: %w", err)
+	//
+	// ServiceUpdateIn always sends project_vpc_id, and null moves the service to the public network,
+	// so the current VPC is sent back as is.
+	s, err := avnGen.ServiceGet(ctx, spec.Project, o.getObjectMeta().Name)
+	if isNotFound(err) {
+		return true, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("failed to get service before deletion: %w", err)
+	}
+
+	if s.TerminationProtection {
+		terminationProtection := false
+		if _, err := avnGen.ServiceUpdate(ctx, spec.Project, o.getObjectMeta().Name, &service.ServiceUpdateIn{
+			ProjectVpcId:          NilIfZero(s.ProjectVpcId),
+			TerminationProtection: &terminationProtection,
+		}); err != nil && !isNotFound(err) {
+			return false, fmt.Errorf("failed to disable termination protection before deletion: %w", err)
+		}
 	}
 
 	err = avnGen.ServiceDelete(ctx, spec.Project, o.getObjectMeta().Name)
