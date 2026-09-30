@@ -2,6 +2,10 @@
 
 ## [MAJOR.MINOR.PATCH] - YYYY-MM-DD
 
+- Fix service kinds with `powered: false` at creation never being created: the service is created
+  and powered off on the next pass. Kafka no longer waits for a backup before powering off
+- Fix a migration being marked complete, and its secret deleted, while the service is powered off
+
 ## v0.48.0 - 2026-10-01
 
 - **BREAKING**: `ServiceUser` now applies `spec.authentication` when creating Aiven users and

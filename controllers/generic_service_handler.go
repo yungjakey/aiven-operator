@@ -258,7 +258,8 @@ func (h *genericServiceHandler) observe(ctx context.Context, avnGen avngen.Clien
 			o.getServiceStatus().Conditions,
 			v1alpha1.ConditionTypeMigrationComplete,
 		)
-		if !migrationDone {
+		// A powered-off service has no active migration, a 404 there says nothing about completion.
+		if !migrationDone && isPowered {
 			if err := h.updateMigrationStatus(ctx, avnGen, o, spec); err != nil {
 				return err
 			}

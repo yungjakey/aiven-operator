@@ -341,6 +341,36 @@ func TestGet_SecretCleanupRunsWhenPoweredOff(t *testing.T) {
 		"migration Secret should have been deleted even though service is powered off, got err: %v", err)
 }
 
+func TestObserve_DoesNotCompleteMigrationWhilePoweredOff(t *testing.T) {
+	t.Parallel()
+
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "creds", Namespace: "default"},
+		Data:       map[string][]byte{"host": []byte("x")},
+	}
+	k8s := fake.NewClientBuilder().WithScheme(scheme).WithObjects(secret).Build()
+
+	pg := newObjectFromYAML[v1alpha1.PostgreSQL](t, yamlPostgres)
+	pg.Namespace = "default"
+	pg.Spec.Powered = new(false)
+	pg.Spec.MigrationSecretSource = &v1alpha1.MigrationSecretSource{Name: "creds", DeleteAfterMigration: true}
+
+	avn := avngen.NewMockClient(t)
+	avn.EXPECT().
+		ServiceGet(mock.Anything, pg.Spec.Project, pg.Name, mock.Anything).
+		Return(&service.ServiceGetOut{State: service.ServiceStateTypePoweroff}, nil).Once()
+	// ServiceGetMigrationStatus would 404 on a powered-off service, which isn't a completed migration.
+
+	h := &genericServiceHandler{fabric: newPostgreSQLAdapterFactory(k8s), log: logr.Discard(), k8s: k8s}
+	require.NoError(t, h.observe(t.Context(), avn, pg))
+
+	require.False(t, meta.IsStatusConditionTrue(pg.Status.Conditions, v1alpha1.ConditionTypeMigrationComplete))
+	require.NoError(t, k8s.Get(t.Context(), types.NamespacedName{Name: "creds", Namespace: "default"}, &corev1.Secret{}))
+}
+
 func TestObserve_EmitsEventWhenConnectionSecretCreationDisabled(t *testing.T) {
 	t.Parallel()
 
