@@ -614,3 +614,19 @@ func TestServiceVersion(t *testing.T) {
 	assert.Empty(t, serviceVersion(serviceTypeKafkaConnect, metadata))
 	assert.Empty(t, serviceVersion(serviceTypeValkey, nil))
 }
+
+func TestCreateOrUpdateRejectsDiskSpaceWithoutUnit(t *testing.T) {
+	t.Parallel()
+
+	pg := newObjectFromYAML[v1alpha1.PostgreSQL](t, yamlPostgres)
+	pg.Spec.DiskSpace = "100"
+
+	avn := avngen.NewMockClient(t)
+	avn.EXPECT().
+		ServiceGet(mock.Anything, pg.Spec.Project, pg.Name).
+		Return(&service.ServiceGetOut{}, nil).Once()
+
+	h := &genericServiceHandler{fabric: newPostgreSQLAdapterFactory(nil), log: logr.Discard()}
+	err := h.createOrUpdate(t.Context(), avn, pg, nil)
+	require.ErrorContains(t, err, "has no unit")
+}

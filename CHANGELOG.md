@@ -2,6 +2,11 @@
 
 ## [MAJOR.MINOR.PATCH] - YYYY-MM-DD
 
+- Fix service deletion moving a VPC service to the public network while disabling termination
+  protection, connection secret keys getting a double prefix, and an empty maintenance time being
+  sent when only the day is set
+- Change service kinds: `disk_space` without a unit now fails the reconcile instead of being ignored
+
 ## v0.48.0 - 2026-10-01
 
 - **BREAKING**: `ServiceUser` now applies `spec.authentication` when creating Aiven users and

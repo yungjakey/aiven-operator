@@ -85,6 +85,10 @@ func (h *genericServiceHandler) createOrUpdate(ctx context.Context, avnGen avnge
 	}
 
 	diskSpace := v1alpha1.ConvertDiskSpace(o.getDiskSpace())
+	if diskSpace == 0 && o.getDiskSpace() != "" {
+		// A value without unit is read as bytes, rounds down to 0 MiB and would be silently dropped.
+		return fmt.Errorf("disk_space %q has no unit, use e.g. %sGiB", o.getDiskSpace(), o.getDiskSpace())
+	}
 	if diskSpace > 0 && exists {
 		for _, v := range oldService.ServiceIntegrations {
 			if v.IntegrationType == service.IntegrationTypeAutoscaler {
