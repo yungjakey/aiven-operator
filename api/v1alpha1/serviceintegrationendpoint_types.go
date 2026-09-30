@@ -24,7 +24,11 @@ import (
 	rsysloguserconfig "github.com/aiven/aiven-operator/api/v1alpha1/userconfig/integrationendpoints/rsyslog"
 )
 
+// A transition rule on an optional field is skipped whenever the field is absent, so it does
+// not block adding or removing that field. The spec-level rules below cover that.
+
 // ServiceIntegrationEndpointSpec defines the desired state of ServiceIntegrationEndpoint
+// +kubebuilder:validation:XValidation:rule="has(self.endpointName) == has(oldSelf.endpointName) && (!has(self.endpointName) || self.endpointName == oldSelf.endpointName)",message="endpointName is immutable, including adding or removing it"
 type ServiceIntegrationEndpointSpec struct {
 	ProjectDependant `json:",inline"`
 

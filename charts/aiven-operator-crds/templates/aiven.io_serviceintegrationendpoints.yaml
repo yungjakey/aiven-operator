@@ -606,6 +606,11 @@ spec:
                 - endpointType
                 - project
               type: object
+              x-kubernetes-validations:
+                - message: endpointName is immutable, including adding or removing it
+                  rule:
+                    has(self.endpointName) == has(oldSelf.endpointName) && (!has(self.endpointName)
+                    || self.endpointName == oldSelf.endpointName)
             status:
               description:
                 ServiceIntegrationEndpointStatus defines the observed state

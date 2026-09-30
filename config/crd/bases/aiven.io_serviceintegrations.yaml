@@ -27,7 +27,7 @@ spec:
         - jsonPath: .spec.destinationServiceName
           name: Destination Service Name
           type: string
-        - jsonPath: .spec.sourceEndpointId
+        - jsonPath: .spec.sourceEndpointID
           name: Source Endpoint ID
           type: string
         - jsonPath: .spec.destinationEndpointId
@@ -1105,6 +1105,52 @@ spec:
                   rule:
                     '!(has(self.destinationEndpointRef) && has(self.destinationEndpointId)
                     && self.destinationEndpointId != "")'
+                - message:
+                    sourceEndpointID is immutable, including adding or removing
+                    it
+                  rule:
+                    has(self.sourceEndpointID) == has(oldSelf.sourceEndpointID) &&
+                    (!has(self.sourceEndpointID) || self.sourceEndpointID == oldSelf.sourceEndpointID)
+                - message:
+                    sourceServiceName is immutable, including adding or removing
+                    it
+                  rule:
+                    has(self.sourceServiceName) == has(oldSelf.sourceServiceName)
+                    && (!has(self.sourceServiceName) || self.sourceServiceName == oldSelf.sourceServiceName)
+                - message:
+                    sourceProjectName is immutable, including adding or removing
+                    it
+                  rule:
+                    has(self.sourceProjectName) == has(oldSelf.sourceProjectName)
+                    && (!has(self.sourceProjectName) || self.sourceProjectName == oldSelf.sourceProjectName)
+                - message:
+                    destinationEndpointId is immutable, including adding or removing
+                    it
+                  rule:
+                    has(self.destinationEndpointId) == has(oldSelf.destinationEndpointId)
+                    && (!has(self.destinationEndpointId) || self.destinationEndpointId
+                    == oldSelf.destinationEndpointId)
+                - message:
+                    destinationEndpointRef is immutable, including adding or removing
+                    it
+                  rule:
+                    has(self.destinationEndpointRef) == has(oldSelf.destinationEndpointRef)
+                    && (!has(self.destinationEndpointRef) || self.destinationEndpointRef
+                    == oldSelf.destinationEndpointRef)
+                - message:
+                    destinationServiceName is immutable, including adding or removing
+                    it
+                  rule:
+                    has(self.destinationServiceName) == has(oldSelf.destinationServiceName)
+                    && (!has(self.destinationServiceName) || self.destinationServiceName
+                    == oldSelf.destinationServiceName)
+                - message:
+                    destinationProjectName is immutable, including adding or removing
+                    it
+                  rule:
+                    has(self.destinationProjectName) == has(oldSelf.destinationProjectName)
+                    && (!has(self.destinationProjectName) || self.destinationProjectName
+                    == oldSelf.destinationProjectName)
             status:
               description: ServiceIntegrationStatus defines the observed state of ServiceIntegration
               properties:

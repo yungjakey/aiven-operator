@@ -177,6 +177,16 @@ spec:
                   type: array
               type: object
               x-kubernetes-validations:
+                - message: billingGroupId is immutable, including adding or removing it
+                  rule:
+                    has(self.billingGroupId) == has(oldSelf.billingGroupId) && (!has(self.billingGroupId)
+                    || self.billingGroupId == oldSelf.billingGroupId)
+                - message:
+                    copyFromProject is immutable, including adding or removing
+                    it
+                  rule:
+                    has(self.copyFromProject) == has(oldSelf.copyFromProject) && (!has(self.copyFromProject)
+                    || self.copyFromProject == oldSelf.copyFromProject)
                 - message:
                     connInfoSecretTargetDisabled can only be set during resource
                     creation.

@@ -2,6 +2,10 @@
 
 ## [MAJOR.MINOR.PATCH] - YYYY-MM-DD
 
+- Fix `ServiceIntegration` update retries hiding the Aiven error, and the `Source Endpoint ID` print column
+- Change `ServiceIntegration`, `ServiceIntegrationEndpoint` and `Project`: adding or removing an
+  immutable optional field is now rejected, not only changing it
+
 ## v0.48.0 - 2026-10-01
 
 - **BREAKING**: `ServiceUser` now applies `spec.authentication` when creating Aiven users and
