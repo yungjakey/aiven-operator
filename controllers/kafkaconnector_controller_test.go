@@ -285,6 +285,64 @@ func TestKafkaConnectorReconciler(t *testing.T) {
 		require.Equal(t, metav1.ConditionUnknown, running.Status)
 	})
 
+	t.Run("Updates connector when a referenced secret changed", func(t *testing.T) {
+		conn := newKafkaConnector(t)
+		conn.Generation = 1
+		conn.Annotations = map[string]string{
+			processedGenerationAnnotation: "1",
+			instanceIsRunningAnnotation:   "true",
+			// Applied before the secret was rotated.
+			kafkaConnectorAppliedConfigAnnotation: "config-with-old-secret",
+		}
+
+		avn := avngen.NewMockClient(t)
+		expectServiceRunning(avn, conn, 1)
+		avn.EXPECT().
+			ServiceKafkaConnectList(mock.Anything, conn.Spec.Project, conn.Spec.ServiceName).
+			Return(&kafkaconnect.ServiceKafkaConnectListOut{
+				Connectors: []kafkaconnect.ConnectorOut{{Name: conn.Name}},
+			}, nil).Once()
+		avn.EXPECT().
+			ServiceKafkaConnectGetConnectorStatus(mock.Anything, conn.Spec.Project, conn.Spec.ServiceName, conn.Name).
+			Return(&kafkaconnect.ServiceKafkaConnectGetConnectorStatusOut{
+				State: kafkaconnect.ServiceKafkaConnectConnectorStateTypeRunning,
+			}, nil).Once()
+		avn.EXPECT().
+			ServiceKafkaConnectEditConnector(mock.Anything, conn.Spec.Project, conn.Spec.ServiceName, conn.Name, mock.Anything).
+			Return(&kafkaconnect.ServiceKafkaConnectEditConnectorOut{}, nil).Once()
+
+		r, _ := runScenario(t, conn, avn, newConnectorSecret())
+
+		got := getConnector(t, r, conn)
+		require.NotEqual(t, "config-with-old-secret", got.Annotations[kafkaConnectorAppliedConfigAnnotation])
+	})
+
+	t.Run("Backfills the applied config without editing an existing connector", func(t *testing.T) {
+		conn := newKafkaConnector(t)
+		conn.Generation = 1
+		conn.Annotations = map[string]string{
+			processedGenerationAnnotation: "1",
+			instanceIsRunningAnnotation:   "true",
+		}
+
+		avn := avngen.NewMockClient(t)
+		expectServiceRunning(avn, conn, 1)
+		avn.EXPECT().
+			ServiceKafkaConnectList(mock.Anything, conn.Spec.Project, conn.Spec.ServiceName).
+			Return(&kafkaconnect.ServiceKafkaConnectListOut{
+				Connectors: []kafkaconnect.ConnectorOut{{Name: conn.Name}},
+			}, nil).Once()
+		avn.EXPECT().
+			ServiceKafkaConnectGetConnectorStatus(mock.Anything, conn.Spec.Project, conn.Spec.ServiceName, conn.Name).
+			Return(&kafkaconnect.ServiceKafkaConnectGetConnectorStatusOut{
+				State: kafkaconnect.ServiceKafkaConnectConnectorStateTypeRunning,
+			}, nil).Once()
+
+		r, res := runScenario(t, conn, avn, newConnectorSecret())
+		require.Equal(t, ctrlruntime.Result{RequeueAfter: testPollInterval}, res)
+		require.NotEmpty(t, getConnector(t, r, conn).Annotations[kafkaConnectorAppliedConfigAnnotation])
+	})
+
 	t.Run("Requeues softly on transient error during update", func(t *testing.T) {
 		for _, tc := range []struct {
 			name string
