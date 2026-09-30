@@ -101,6 +101,11 @@ func (r *KafkaConnectorController) Observe(ctx context.Context, conn *v1alpha1.K
 	// Mark running only when the connector is actually RUNNING on Aiven side.
 	if connStat.State == kafkaconnect.ServiceKafkaConnectConnectorStateTypeRunning {
 		markInstanceRunning(conn)
+	} else if hasIsRunningAnnotation(conn) {
+		// Dependants must stop trusting a connector that left RUNNING, e.g. FAILED or PAUSED.
+		delete(conn.GetAnnotations(), instanceIsRunningAnnotation)
+		meta.SetStatusCondition(&conn.Status.Conditions, getRunningCondition(metav1.ConditionFalse, "CheckRunning",
+			fmt.Sprintf("Connector is %s on Aiven side", connStat.State)))
 	}
 
 	return Observation{
@@ -191,10 +196,6 @@ func (r *KafkaConnectorController) buildConnectorConfig(ctx context.Context, con
 	)
 
 	m := make(map[string]string)
-
-	m[configFieldConnectorName] = conn.GetName()
-	m[configFieldConnectorClass] = conn.Spec.ConnectorClass
-
 	for k, v := range conn.Spec.UserConfig {
 		t, err := template.New(k).Funcs(funcMap).Parse(v)
 		if err != nil {
@@ -206,6 +207,10 @@ func (r *KafkaConnectorController) buildConnectorConfig(ctx context.Context, con
 		}
 		m[k] = templateRes.String()
 	}
+
+	// Set last, so userConfig can't rename the connector away from the one this resource tracks.
+	m[configFieldConnectorName] = conn.GetName()
+	m[configFieldConnectorClass] = conn.Spec.ConnectorClass
 	return m, nil
 }
 
