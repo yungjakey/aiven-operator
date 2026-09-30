@@ -44,25 +44,28 @@ func (r *KafkaSchemaRegistryACLController) Observe(ctx context.Context, acl *v1a
 		return Observation{}, fmt.Errorf("cannot list KafkaSchemaRegistryACLs on Aiven side: %w", err)
 	}
 
-	for _, existing := range list {
-		if existing.Id == nil || !schemaRegistrySpecMatches(acl.Spec, existing) {
-			continue
+	// Prefer the entry this CR owns over an identical one, e.g. created by another CR.
+	var id string
+	for _, a := range list {
+		if a.Id != nil && schemaRegistrySpecMatches(acl.Spec, a) && (id == "" || *a.Id == acl.Status.ACLId) {
+			id = *a.Id
 		}
-
-		if acl.Status.ACLId != *existing.Id {
-			// Adopting an entry this CR did not create.
-			logr.FromContextOrDiscard(ctx).Info("adopting existing KafkaSchemaRegistryACL",
-				"aclID", *existing.Id)
-			acl.Status.ACLId = *existing.Id
-		}
-
-		markInstanceRunning(acl)
-
-		// Spec fields are immutable, so an existing ACL is always up to date.
-		return Observation{ResourceExists: true, ResourceUpToDate: true}, nil
 	}
 
-	return Observation{ResourceExists: false}, nil
+	if id == "" {
+		return Observation{ResourceExists: false}, nil
+	}
+
+	if acl.Status.ACLId != id {
+		// Adopting an entry this CR did not create.
+		logr.FromContextOrDiscard(ctx).Info("adopting existing KafkaSchemaRegistryACL", "aclID", id)
+		acl.Status.ACLId = id
+	}
+
+	markInstanceRunning(acl)
+
+	// Spec fields are immutable, so an existing ACL is always up to date.
+	return Observation{ResourceExists: true, ResourceUpToDate: true}, nil
 }
 
 func (r *KafkaSchemaRegistryACLController) Create(ctx context.Context, acl *v1alpha1.KafkaSchemaRegistryACL) (CreateResult, error) {

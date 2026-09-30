@@ -49,6 +49,14 @@ func (r *KafkaACLController) Observe(ctx context.Context, acl *v1alpha1.KafkaACL
 		return Observation{}, err
 	}
 
+	if acl.Status.ID != "" && acl.Status.ID != id {
+		// The spec moved onto another existing ACL. Remove the one this resource created first,
+		// otherwise it keeps granting the old permission.
+		if err := r.deleteACL(ctx, acl); err != nil {
+			return Observation{}, err
+		}
+	}
+
 	acl.Status.ID = id
 	markInstanceRunning(acl)
 
@@ -142,11 +150,14 @@ func (r *KafkaACLController) findIDByContent(ctx context.Context, acl *v1alpha1.
 	}
 
 	// There could be multiple ACLs with same attributes.
-	// Assume the one that was created is the last one matching.
+	// Prefer the one this resource owns, otherwise assume the one that was created is the last one matching.
 	var latestID string
 	for _, a := range list {
 		if acl.Spec.Topic == a.Topic && acl.Spec.Username == a.Username && acl.Spec.Permission == a.Permission {
 			latestID = fromAnyPointer(a.Id)
+			if latestID == acl.Status.ID {
+				break
+			}
 		}
 	}
 

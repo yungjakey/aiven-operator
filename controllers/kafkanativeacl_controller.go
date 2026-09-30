@@ -44,25 +44,29 @@ func (r *KafkaNativeACLController) Observe(ctx context.Context, acl *v1alpha1.Ka
 		return Observation{}, fmt.Errorf("list Kafka-native ACLs error: %w", err)
 	}
 
-	for _, existing := range list.KafkaAcl {
-		if !nativeSpecMatches(acl.Spec, existing) {
-			continue
+	// Prefer the entry this CR owns over an identical one, e.g. created by another CR.
+	var existing *kafka.KafkaAclOut
+	for i, a := range list.KafkaAcl {
+		if nativeSpecMatches(acl.Spec, a) && (existing == nil || a.Id == acl.Status.ID) {
+			existing = &list.KafkaAcl[i]
 		}
-
-		if acl.Status.ID != existing.Id {
-			// Adopting an entry this CR did not create.
-			logr.FromContextOrDiscard(ctx).Info("adopting existing Kafka-native ACL",
-				"aclID", existing.Id, "cachedID", acl.Status.ID)
-			acl.Status.ID = existing.Id
-		}
-
-		markInstanceRunning(acl)
-
-		// The spec is immutable, so an existing ACL is always up to date.
-		return Observation{ResourceExists: true, ResourceUpToDate: true}, nil
 	}
 
-	return Observation{ResourceExists: false}, nil
+	if existing == nil {
+		return Observation{ResourceExists: false}, nil
+	}
+
+	if acl.Status.ID != existing.Id {
+		// Adopting an entry this CR did not create.
+		logr.FromContextOrDiscard(ctx).Info("adopting existing Kafka-native ACL",
+			"aclID", existing.Id, "cachedID", acl.Status.ID)
+		acl.Status.ID = existing.Id
+	}
+
+	markInstanceRunning(acl)
+
+	// The spec is immutable, so an existing ACL is always up to date.
+	return Observation{ResourceExists: true, ResourceUpToDate: true}, nil
 }
 
 func (r *KafkaNativeACLController) Create(ctx context.Context, acl *v1alpha1.KafkaNativeACL) (CreateResult, error) {

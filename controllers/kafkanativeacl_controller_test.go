@@ -366,6 +366,31 @@ func TestKafkaNativeACLReconciler(t *testing.T) {
 		require.Equal(t, "1", got.Annotations[processedGenerationAnnotation])
 		require.Equal(t, "true", got.Annotations[instanceIsRunningAnnotation])
 	})
+
+	t.Run("Keeps its own KafkaNativeACL when a duplicate entry matches the spec", func(t *testing.T) {
+		acl := newObjectFromYAML[v1alpha1.KafkaNativeACL](t, yamlKafkaNativeACL)
+		acl.Generation = 1
+		acl.Status.ID = "own"
+		acl.Annotations = map[string]string{processedGenerationAnnotation: "1"}
+
+		list := nativeACLListWith(acl, "duplicate")
+		list.KafkaAcl = append(list.KafkaAcl, nativeACLListWith(acl, "own").KafkaAcl...)
+
+		avn := avngen.NewMockClient(t)
+		avn.EXPECT().
+			ServiceGet(mock.Anything, acl.Spec.Project, acl.Spec.ServiceName, mock.Anything).
+			Return(runningService(), nil).Once()
+		avn.EXPECT().
+			ServiceKafkaNativeAclList(mock.Anything, acl.Spec.Project, acl.Spec.ServiceName).
+			Return(list, nil).Once()
+
+		r, _, err := runKafkaNativeACLScenario(t, acl, avn)
+		require.NoError(t, err)
+
+		got := &v1alpha1.KafkaNativeACL{}
+		require.NoError(t, r.Get(t.Context(), types.NamespacedName{Name: acl.Name, Namespace: acl.Namespace}, got))
+		require.Equal(t, "own", got.Status.ID)
+	})
 }
 
 func TestNativeSpecMatches(t *testing.T) {

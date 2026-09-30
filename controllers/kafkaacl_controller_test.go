@@ -292,4 +292,60 @@ func TestKafkaACLReconciler(t *testing.T) {
 		require.Equal(t, "2", got.Annotations[processedGenerationAnnotation])
 		require.Equal(t, "true", got.Annotations[instanceIsRunningAnnotation])
 	})
+	t.Run("Deletes the owned ACL when the changed spec matches another existing ACL", func(t *testing.T) {
+		acl := newKafkaACL(t)
+		acl.Generation = 2
+		acl.Annotations = map[string]string{processedGenerationAnnotation: "1"}
+		acl.Finalizers = []string{instanceDeletionFinalizer}
+		acl.Status.ID = "owned-admin"
+		acl.Spec.Permission = kafka.PermissionTypeRead
+
+		avn := avngen.NewMockClient(t)
+		avn.EXPECT().
+			ServiceGet(mock.Anything, acl.Spec.Project, acl.Spec.ServiceName, mock.Anything).
+			Return(runningService(), nil).Once()
+		avn.EXPECT().
+			ServiceKafkaAclList(mock.Anything, acl.Spec.Project, acl.Spec.ServiceName).
+			Return([]kafka.ServiceKafkaAclListOut{
+				{Id: new("owned-admin"), Permission: kafka.PermissionTypeAdmin, Topic: acl.Spec.Topic, Username: acl.Spec.Username},
+				{Id: new("other-read"), Permission: kafka.PermissionTypeRead, Topic: acl.Spec.Topic, Username: acl.Spec.Username},
+			}, nil).Once()
+		avn.EXPECT().
+			ServiceKafkaAclDelete(mock.Anything, acl.Spec.Project, acl.Spec.ServiceName, "owned-admin").
+			Return(nil, nil).Once()
+
+		r, _, err := runKafkaACLScenario(t, acl, avn)
+		require.NoError(t, err)
+
+		got := &v1alpha1.KafkaACL{}
+		require.NoError(t, r.Get(t.Context(), types.NamespacedName{Name: acl.Name, Namespace: acl.Namespace}, got))
+		require.Equal(t, "other-read", got.Status.ID)
+		require.Equal(t, "2", got.Annotations[processedGenerationAnnotation])
+	})
+
+	t.Run("Keeps its own ACL when a duplicate with the same content exists", func(t *testing.T) {
+		acl := newKafkaACL(t)
+		acl.Generation = 1
+		acl.Annotations = map[string]string{processedGenerationAnnotation: "1"}
+		acl.Finalizers = []string{instanceDeletionFinalizer}
+		acl.Status.ID = "own"
+
+		avn := avngen.NewMockClient(t)
+		avn.EXPECT().
+			ServiceGet(mock.Anything, acl.Spec.Project, acl.Spec.ServiceName, mock.Anything).
+			Return(runningService(), nil).Once()
+		avn.EXPECT().
+			ServiceKafkaAclList(mock.Anything, acl.Spec.Project, acl.Spec.ServiceName).
+			Return([]kafka.ServiceKafkaAclListOut{
+				{Id: new("own"), Permission: acl.Spec.Permission, Topic: acl.Spec.Topic, Username: acl.Spec.Username},
+				{Id: new("duplicate"), Permission: acl.Spec.Permission, Topic: acl.Spec.Topic, Username: acl.Spec.Username},
+			}, nil).Once()
+
+		r, _, err := runKafkaACLScenario(t, acl, avn)
+		require.NoError(t, err)
+
+		got := &v1alpha1.KafkaACL{}
+		require.NoError(t, r.Get(t.Context(), types.NamespacedName{Name: acl.Name, Namespace: acl.Namespace}, got))
+		require.Equal(t, "own", got.Status.ID)
+	})
 }
