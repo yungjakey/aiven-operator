@@ -2,6 +2,10 @@
 
 ## [MAJOR.MINOR.PATCH] - YYYY-MM-DD
 
+- Fix `ClickhouseGrant` revoking the spec instead of the applied grants on deletion, leaking grants
+  after a partial failure, rejecting grants on `default`/`system`, and widening lowercase `select`
+  with `columns` to the whole table
+
 ## v0.48.0 - 2026-10-01
 
 - **BREAKING**: `ServiceUser` now applies `spec.authentication` when creating Aiven users and

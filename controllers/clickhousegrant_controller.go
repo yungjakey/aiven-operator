@@ -64,7 +64,12 @@ func (r *ClickhouseGrantController) Update(ctx context.Context, g *v1alpha1.Clic
 }
 
 func (r *ClickhouseGrantController) Delete(ctx context.Context, g *v1alpha1.ClickhouseGrant) error {
-	// Revokes the latest grants from the spec.
+	// Revokes what was applied, which differs from the spec when its latest change was never applied.
+	if g.Status.State != nil {
+		if err := revokeGrants(ctx, r.avnGen, g, g.Status.State); err != nil {
+			return err
+		}
+	}
 	return revokeGrants(ctx, r.avnGen, g, &g.Spec.Grants)
 }
 
@@ -79,13 +84,15 @@ func (r *ClickhouseGrantController) applyGrants(ctx context.Context, g *v1alpha1
 		}
 	}
 
+	// Stores the grants before applying them: some statements may succeed even if others fail,
+	// and the next reconciliation must revoke them before re-granting.
+	g.Status.State = g.Spec.Grants.DeepCopy()
+
 	// Grants new privileges
 	if err := grantSpecGrants(ctx, r.avnGen, g); err != nil {
 		return err
 	}
 
-	// Stores the applied grants so the next reconciliation can revoke them before re-granting.
-	g.Status.State = g.Spec.Grants.DeepCopy()
 	markInstanceRunning(g)
 	return nil
 }
