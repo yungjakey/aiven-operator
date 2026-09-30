@@ -634,7 +634,7 @@ func getMaintenanceWindow(dow service.DowType, time string) *service.Maintenance
 	if dow != "" || time != "" {
 		return &service.MaintenanceIn{
 			Dow:  dow,
-			Time: &time,
+			Time: toOptionalStringPointer(time),
 		}
 	}
 
