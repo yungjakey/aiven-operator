@@ -240,8 +240,29 @@ func (i *instanceReconcilerHelper) reconcile(ctx context.Context, o v1alpha1.Aiv
 			return err
 		}
 
-		updated := o.DeepCopyObject().(client.Object)
-		updated.SetResourceVersion(latest.GetResourceVersion())
+		// Apply only the metadata changed by this reconcile onto the latest object,
+		// so that spec and metadata edits made meanwhile are kept.
+		updated := latest.DeepCopyObject().(client.Object)
+		annotations := updated.GetAnnotations()
+		if annotations == nil {
+			annotations = map[string]string{}
+		}
+		for k, v := range orig.GetAnnotations() {
+			if cur, ok := o.GetAnnotations()[k]; !ok {
+				delete(annotations, k)
+			} else if cur != v {
+				annotations[k] = cur
+			}
+		}
+		for k, v := range o.GetAnnotations() {
+			if _, ok := orig.GetAnnotations()[k]; !ok {
+				annotations[k] = v
+			}
+		}
+		updated.SetAnnotations(annotations)
+		if controllerutil.ContainsFinalizer(o, instanceDeletionFinalizer) {
+			controllerutil.AddFinalizer(updated, instanceDeletionFinalizer)
+		}
 		if err := i.k8s.Update(ctx, updated); err != nil {
 			return err
 		}
