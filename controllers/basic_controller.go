@@ -232,7 +232,7 @@ func (i *instanceReconcilerHelper) reconcile(ctx context.Context, o v1alpha1.Aiv
 		// while the original object must already have all the fields updated in runtime
 		// Additionally, it gets the "latest version" to resolve optimistic concurrency control conflict
 		latest := o.DeepCopyObject().(client.Object)
-		err = i.k8s.Get(ctx, types.NamespacedName{
+		err := i.k8s.Get(ctx, types.NamespacedName{
 			Name:      latest.GetName(),
 			Namespace: latest.GetNamespace(),
 		}, latest)
@@ -242,8 +242,7 @@ func (i *instanceReconcilerHelper) reconcile(ctx context.Context, o v1alpha1.Aiv
 
 		updated := o.DeepCopyObject().(client.Object)
 		updated.SetResourceVersion(latest.GetResourceVersion())
-		err := i.k8s.Update(ctx, updated)
-		if err != nil {
+		if err := i.k8s.Update(ctx, updated); err != nil {
 			return err
 		}
 
@@ -518,13 +517,7 @@ func (i *instanceReconcilerHelper) createOrUpdateInstance(ctx context.Context, o
 
 	// API errors are retrayable.
 	if isServerError(err) {
-		i.log.Info(
-			"unable to create or update %s: %s/%s, retrying: %s",
-			o.GetObjectKind().GroupVersionKind().Kind,
-			o.GetNamespace(),
-			o.GetName(),
-			err,
-		)
+		i.log.Info("unable to create or update instance, retrying", "error", err.Error())
 		return true, nil
 	}
 

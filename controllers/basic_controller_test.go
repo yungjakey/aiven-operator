@@ -88,7 +88,8 @@ func TestInstanceReconcilerHelper_reconcile(t *testing.T) {
 		_, err := helper.getObjectRefs(t.Context(), pg)
 		require.ErrorIs(t, err, errRefKindDisabled)
 
-		_, _ = helper.reconcile(t.Context(), pg)
+		_, err = helper.reconcile(t.Context(), pg)
+		require.ErrorIs(t, err, errRefKindDisabled, "reconcile error must survive the status update")
 
 		got := &v1alpha1.PostgreSQL{}
 		require.NoError(t, k8sClient.Get(t.Context(), types.NamespacedName{Name: pg.Name, Namespace: pg.Namespace}, got))
