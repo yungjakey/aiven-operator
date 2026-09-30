@@ -123,6 +123,7 @@ func TestInstanceReconcilerHelper_reconcile(t *testing.T) {
 				// The user edits the spec while the controller talks to Aiven.
 				latest := &v1alpha1.PostgreSQL{}
 				require.NoError(t, k8sClient.Get(ctx, key, latest))
+				require.Contains(t, latest.Finalizers, instanceDeletionFinalizer, "finalizer must be persisted before creating at Aiven")
 				latest.Spec.Plan = "business-8"
 				latest.Annotations = map[string]string{"user": "annotation"}
 				return k8sClient.Update(ctx, latest)

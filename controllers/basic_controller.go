@@ -291,9 +291,11 @@ func (i *instanceReconcilerHelper) reconcileInstance(ctx context.Context, o v1al
 	}
 
 	if !controllerutil.ContainsFinalizer(o, instanceDeletionFinalizer) {
-		// Adds finalizer. The commit is performed in the outer function
+		// Persisted before anything is created at Aiven, so a quick delete can't orphan the service.
 		i.log.Info("adding finalizer to instance")
-		controllerutil.AddFinalizer(o, instanceDeletionFinalizer)
+		if err := addFinalizer(ctx, i.k8s, o, instanceDeletionFinalizer); err != nil {
+			return false, fmt.Errorf("unable to add finalizer to instance: %w", err)
+		}
 		i.rec.Event(o, corev1.EventTypeNormal, eventAddedFinalizer, "instance finalizer added")
 	}
 
