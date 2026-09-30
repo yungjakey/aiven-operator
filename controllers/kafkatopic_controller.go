@@ -4,6 +4,7 @@ package controllers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"time"
@@ -77,7 +78,9 @@ func (r *KafkaTopicController) Observe(ctx context.Context, topic *v1alpha1.Kafk
 	}
 
 	switch {
-	case isServerError(err):
+	// The client retries 5xx for longer than kafkaTopicListTimeout, so a sustained 5xx ends as a
+	// timeout. The caller's own context was checked above, so the deadline is the list's own.
+	case isServerError(err), errors.Is(err, context.DeadlineExceeded):
 		// Getting topic info can sometimes temporarily fail with 5xx.
 		// Don't treat that as a fatal error but keep on retrying instead.
 		// When this happens during a spec update, assume the topic exists if it was applied before.
@@ -111,10 +114,12 @@ func (r *KafkaTopicController) Observe(ctx context.Context, topic *v1alpha1.Kafk
 					fmt.Sprintf("Instance is in state %s on Aiven side", topic.Status.State)))
 		}
 
-		return Observation{
-			ResourceExists:   true,
-			ResourceUpToDate: hasLatestGeneration(topic) && topicMatchesSpec(topic, topicInfo),
-		}, nil
+		// A topic that isn't ACTIVE may report values from before a change still in progress.
+		current := hasLatestGeneration(topic)
+		if topicInfo.State == kafkatopic.TopicStateTypeActive {
+			current = current && topicMatchesSpec(topic, topicInfo)
+		}
+		return Observation{ResourceExists: true, ResourceUpToDate: current}, nil
 	}
 
 	// Topic not found in list. Report it as missing.
@@ -238,7 +243,8 @@ func (r *KafkaTopicController) checkPreconditions(ctx context.Context, topic *v1
 // large services slow to reconcile (aiven/aiven-operator#974). Configuration keys outside that
 // set are therefore still applied blindly and not checked for drift.
 func topicMatchesSpec(topic *v1alpha1.KafkaTopic, remote kafkatopic.TopicOut) bool {
-	if remote.Partitions != topic.Spec.Partitions || remote.Replication != topic.Spec.Replication {
+	// Kafka can't decrease partitions, so more partitions than the spec is drift that can't be repaired.
+	if remote.Partitions < topic.Spec.Partitions || remote.Replication != topic.Spec.Replication {
 		return false
 	}
 

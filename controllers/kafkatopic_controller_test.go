@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -308,6 +309,94 @@ func TestKafkaTopicReconciler(t *testing.T) {
 		_, res, err := runScenario(t, topic, avn)
 		require.NoError(t, err)
 		require.Equal(t, ctrlruntime.Result{RequeueAfter: requeueTimeout}, res)
+	})
+
+	t.Run("Treats a timed out topic list like a server error", func(t *testing.T) {
+		topic := newObjectFromYAML[v1alpha1.KafkaTopic](t, yamlKafkaTopic)
+		topic.Generation = 1
+		topic.Spec.Project = "test-project-list-timeout"
+		topic.Spec.ServiceName = "test-project-list-timeout"
+		topic.Annotations = map[string]string{
+			processedGenerationAnnotation: "1",
+			instanceIsRunningAnnotation:   "true",
+		}
+
+		avn := avngen.NewMockClient(t)
+		avn.EXPECT().
+			ServiceGet(mock.Anything, topic.Spec.Project, topic.Spec.ServiceName).
+			Return(&service.ServiceGetOut{
+				State:      service.ServiceStateTypeRunning,
+				NodeStates: []service.NodeStateOut{{State: service.NodeStateTypeRunning}, {State: service.NodeStateTypeRunning}},
+			}, nil).Once()
+		// The client retries 5xx for longer than the list deadline, so a sustained 5xx surfaces as a timeout.
+		avn.EXPECT().
+			ServiceKafkaTopicList(mock.Anything, topic.Spec.Project, topic.Spec.ServiceName).
+			Return(nil, fmt.Errorf("get topics: %w", context.DeadlineExceeded)).Once()
+
+		r, res, err := runScenario(t, topic, avn)
+		require.NoError(t, err)
+		require.Equal(t, ctrlruntime.Result{RequeueAfter: testPollInterval}, res)
+
+		got := &v1alpha1.KafkaTopic{}
+		require.NoError(t, r.Get(t.Context(), types.NamespacedName{Name: topic.Name, Namespace: topic.Namespace}, got))
+		require.Nil(t, meta.FindStatusCondition(got.Status.Conditions, ConditionTypeError))
+	})
+
+	t.Run("Does not update a KafkaTopic while it is configuring", func(t *testing.T) {
+		topic := newObjectFromYAML[v1alpha1.KafkaTopic](t, yamlKafkaTopic)
+		topic.Generation = 1
+		topic.Spec.Project = "test-project-configuring-drift"
+		topic.Spec.ServiceName = "test-project-configuring-drift"
+		topic.Annotations = map[string]string{
+			processedGenerationAnnotation: "1",
+			instanceIsRunningAnnotation:   "true",
+		}
+
+		avn := avngen.NewMockClient(t)
+		avn.EXPECT().
+			ServiceGet(mock.Anything, topic.Spec.Project, topic.Spec.ServiceName).
+			Return(&service.ServiceGetOut{
+				State:      service.ServiceStateTypeRunning,
+				NodeStates: []service.NodeStateOut{{State: service.NodeStateTypeRunning}, {State: service.NodeStateTypeRunning}},
+			}, nil).Once()
+		// A change in progress may still report the old values.
+		configuring := topicMatchingSpec(topic, kafkatopic.TopicStateTypeConfiguring)
+		configuring.Replication--
+		avn.EXPECT().
+			ServiceKafkaTopicList(mock.Anything, topic.Spec.Project, topic.Spec.ServiceName).
+			Return([]kafkatopic.TopicOut{configuring}, nil).Once()
+
+		_, _, err := runScenario(t, topic, avn)
+		require.NoError(t, err)
+	})
+
+	t.Run("Does not try to decrease partitions raised outside the operator", func(t *testing.T) {
+		topic := newObjectFromYAML[v1alpha1.KafkaTopic](t, yamlKafkaTopic)
+		topic.Generation = 1
+		topic.Spec.Project = "test-project-more-partitions"
+		topic.Spec.ServiceName = "test-project-more-partitions"
+		topic.Annotations = map[string]string{
+			processedGenerationAnnotation: "1",
+			instanceIsRunningAnnotation:   "true",
+		}
+
+		avn := avngen.NewMockClient(t)
+		avn.EXPECT().
+			ServiceGet(mock.Anything, topic.Spec.Project, topic.Spec.ServiceName).
+			Return(&service.ServiceGetOut{
+				State:      service.ServiceStateTypeRunning,
+				NodeStates: []service.NodeStateOut{{State: service.NodeStateTypeRunning}, {State: service.NodeStateTypeRunning}},
+			}, nil).Once()
+		// Kafka can't decrease partitions, so an Update would only fail on every poll.
+		raised := topicMatchingSpec(topic, kafkatopic.TopicStateTypeActive)
+		raised.Partitions = topic.Spec.Partitions + 3
+		avn.EXPECT().
+			ServiceKafkaTopicList(mock.Anything, topic.Spec.Project, topic.Spec.ServiceName).
+			Return([]kafkatopic.TopicOut{raised}, nil).Once()
+
+		_, res, err := runScenario(t, topic, avn)
+		require.NoError(t, err)
+		require.Equal(t, ctrlruntime.Result{RequeueAfter: testPollInterval}, res)
 	})
 
 	t.Run("Clears the running marker when KafkaTopic leaves ACTIVE", func(t *testing.T) {
