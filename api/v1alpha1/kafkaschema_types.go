@@ -13,10 +13,12 @@ import (
 type KafkaSchemaSpec struct {
 	ServiceDependant `json:",inline"`
 
+	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="Value is immutable"
 	// Kafka Schema Subject name
 	SubjectName string `json:"subjectName"`
 
+	// +kubebuilder:validation:MinLength=1
 	// Kafka Schema definition. Format depends on schemaType (AVRO/JSON/PROTOBUF)
 	Schema string `json:"schema"`
 

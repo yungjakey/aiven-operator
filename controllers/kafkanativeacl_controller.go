@@ -69,7 +69,7 @@ func (r *KafkaNativeACLController) Create(ctx context.Context, acl *v1alpha1.Kaf
 	delete(acl.GetAnnotations(), instanceIsRunningAnnotation)
 
 	in := &kafka.ServiceKafkaNativeAclAddIn{
-		Host:           &acl.Spec.Host,
+		Host:           NilIfZero(acl.Spec.Host),
 		Operation:      acl.Spec.Operation,
 		PatternType:    acl.Spec.PatternType,
 		PermissionType: acl.Spec.PermissionType,

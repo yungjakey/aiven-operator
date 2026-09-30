@@ -13,6 +13,7 @@ type KafkaTopicSpec struct {
 
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=249
+	// +kubebuilder:validation:Pattern=`^[a-zA-Z0-9._-]+$`
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="Value is immutable"
 	// Topic name. If provided, is used instead of metadata.name.
 	// This field supports additional characters, has a longer length,

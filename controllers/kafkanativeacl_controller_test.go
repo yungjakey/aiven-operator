@@ -153,6 +153,28 @@ func TestKafkaNativeACLReconciler(t *testing.T) {
 		require.Equal(t, "true", got.Annotations[instanceIsRunningAnnotation])
 	})
 
+	t.Run("Omits an explicitly empty host so Aiven applies its default", func(t *testing.T) {
+		acl := newObjectFromYAML[v1alpha1.KafkaNativeACL](t, yamlKafkaNativeACL)
+		acl.Generation = 1
+		acl.Spec.Host = "" // the CRD default only applies to an absent field
+
+		avn := avngen.NewMockClient(t)
+		avn.EXPECT().
+			ServiceGet(mock.Anything, acl.Spec.Project, acl.Spec.ServiceName, mock.Anything).
+			Return(runningService(), nil).Once()
+		avn.EXPECT().
+			ServiceKafkaNativeAclList(mock.Anything, acl.Spec.Project, acl.Spec.ServiceName).
+			Return(&kafka.ServiceKafkaNativeAclListOut{KafkaAcl: nil}, nil).Once()
+		avn.EXPECT().
+			ServiceKafkaNativeAclAdd(
+				mock.Anything, acl.Spec.Project, acl.Spec.ServiceName,
+				mock.MatchedBy(func(in *kafka.ServiceKafkaNativeAclAddIn) bool { return in.Host == nil }),
+			).Return(&kafka.ServiceKafkaNativeAclAddOut{Id: "acl-123"}, nil).Once()
+
+		_, _, err := runKafkaNativeACLScenario(t, acl, avn)
+		require.NoError(t, err)
+	})
+
 	t.Run("Marks KafkaNativeACL running when it already exists", func(t *testing.T) {
 		acl := newObjectFromYAML[v1alpha1.KafkaNativeACL](t, yamlKafkaNativeACL)
 		acl.Generation = 1

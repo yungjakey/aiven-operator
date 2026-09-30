@@ -175,6 +175,7 @@ spec:
                   description:
                     Kafka Schema definition. Format depends on schemaType
                     (AVRO/JSON/PROTOBUF)
+                  minLength: 1
                   type: string
                 schemaType:
                   description: Schema type
@@ -198,6 +199,7 @@ spec:
                       rule: self == oldSelf
                 subjectName:
                   description: Kafka Schema Subject name
+                  minLength: 1
                   type: string
                   x-kubernetes-validations:
                     - message: Value is immutable
