@@ -71,11 +71,16 @@ func main() {
 			"Enabling this will ensure there is only one active controller manager.")
 	flag.BoolVar(&development, "development", true, "Configures the logger to use a development config (stacktraces on warnings, no sampling)")
 
-	opts := zap.Options{
-		Development: development,
-	}
+	opts := zap.Options{}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
+
+	// --development is read after parsing, an explicit --zap-devel still takes precedence.
+	zapDevelSet := false
+	flag.Visit(func(f *flag.Flag) { zapDevelSet = zapDevelSet || f.Name == "zap-devel" })
+	if !zapDevelSet {
+		opts.Development = development
+	}
 
 	// set log level from environment variable if provided and no flag was set
 	if logLevel := os.Getenv("LOG_LEVEL"); logLevel != "" && opts.Level == nil {
