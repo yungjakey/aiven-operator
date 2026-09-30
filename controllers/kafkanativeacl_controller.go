@@ -104,6 +104,16 @@ func (r *KafkaNativeACLController) Delete(ctx context.Context, acl *v1alpha1.Kaf
 		return nil
 	}
 
+	var list v1alpha1.KafkaNativeACLList
+	if err := r.List(ctx, &list); err != nil {
+		return fmt.Errorf("listing KafkaNativeACL resources: %w", err)
+	}
+	if err := errIfEntryShared(list.Items, acl, func(o *v1alpha1.KafkaNativeACL) bool {
+		return o.Spec.Project == acl.Spec.Project && o.Spec.ServiceName == acl.Spec.ServiceName && o.Status.ID == acl.Status.ID
+	}); err != nil {
+		return err
+	}
+
 	err := r.avnGen.ServiceKafkaNativeAclDelete(ctx, acl.Spec.Project, acl.Spec.ServiceName, acl.Status.ID)
 	if err != nil && !isNotFound(err) {
 		return fmt.Errorf("delete Kafka-native ACL error: %w", err)

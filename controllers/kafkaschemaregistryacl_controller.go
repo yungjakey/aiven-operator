@@ -89,6 +89,16 @@ func (r *KafkaSchemaRegistryACLController) Delete(ctx context.Context, acl *v1al
 		return nil
 	}
 
+	var list v1alpha1.KafkaSchemaRegistryACLList
+	if err := r.List(ctx, &list); err != nil {
+		return fmt.Errorf("listing KafkaSchemaRegistryACL resources: %w", err)
+	}
+	if err := errIfEntryShared(list.Items, acl, func(o *v1alpha1.KafkaSchemaRegistryACL) bool {
+		return o.Spec.Project == acl.Spec.Project && o.Spec.ServiceName == acl.Spec.ServiceName && o.Status.ACLId == acl.Status.ACLId
+	}); err != nil {
+		return err
+	}
+
 	_, err := r.avnGen.ServiceSchemaRegistryAclDelete(ctx, acl.Spec.Project, acl.Spec.ServiceName, acl.Status.ACLId)
 	if err != nil && !isNotFound(err) {
 		return fmt.Errorf("cannot delete KafkaSchemaRegistryACL on Aiven side: %w", err)

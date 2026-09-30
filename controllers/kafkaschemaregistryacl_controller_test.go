@@ -362,6 +362,28 @@ func TestKafkaSchemaRegistryACLReconciler(t *testing.T) {
 		require.NoError(t, r.Get(t.Context(), types.NamespacedName{Name: acl.Name, Namespace: acl.Namespace}, got))
 		require.Equal(t, "own", got.Status.ACLId)
 	})
+
+	t.Run("Keeps the Aiven entry on deletion while another KafkaSchemaRegistryACL manages it", func(t *testing.T) {
+		acl := newKafkaSchemaRegistryACL(t)
+		acl.Generation = 1
+		acl.Status.ACLId = "shared-id"
+		acl.Finalizers = []string{instanceDeletionFinalizer}
+		now := metav1.Now()
+		acl.DeletionTimestamp = &now
+
+		other := newKafkaSchemaRegistryACL(t)
+		other.Name = "other"
+		other.Status.ACLId = "shared-id"
+
+		avn := avngen.NewMockClient(t) // ServiceSchemaRegistryAclDelete must not be called
+
+		r, _, err := runKafkaSchemaRegistryACLScenario(t, acl, avn, other)
+		require.NoError(t, err)
+
+		got := &v1alpha1.KafkaSchemaRegistryACL{}
+		err = r.Get(t.Context(), types.NamespacedName{Name: acl.Name, Namespace: acl.Namespace}, got)
+		require.True(t, apierrors.IsNotFound(err))
+	})
 }
 
 func TestSchemaRegistrySpecMatches(t *testing.T) {

@@ -87,6 +87,16 @@ func (r *ClickhouseRoleController) Update(_ context.Context, _ *v1alpha1.Clickho
 }
 
 func (r *ClickhouseRoleController) Delete(ctx context.Context, role *v1alpha1.ClickhouseRole) error {
+	var list v1alpha1.ClickhouseRoleList
+	if err := r.List(ctx, &list); err != nil {
+		return fmt.Errorf("listing ClickhouseRole resources: %w", err)
+	}
+	if err := errIfEntryShared(list.Items, role, func(o *v1alpha1.ClickhouseRole) bool {
+		return o.Spec.Project == role.Spec.Project && o.Spec.ServiceName == role.Spec.ServiceName && o.Spec.Role == role.Spec.Role
+	}); err != nil {
+		return err
+	}
+
 	err := runQuery(ctx, r.avnGen, role, "DROP ROLE IF EXISTS")
 	if err != nil && !isUnknownRole(err) && !isNotFound(err) {
 		return err

@@ -129,6 +129,16 @@ func (r *ConnectionPoolController) Update(ctx context.Context, cp *v1alpha1.Conn
 }
 
 func (r *ConnectionPoolController) Delete(ctx context.Context, cp *v1alpha1.ConnectionPool) error {
+	var list v1alpha1.ConnectionPoolList
+	if err := r.List(ctx, &list); err != nil {
+		return fmt.Errorf("listing ConnectionPool resources: %w", err)
+	}
+	if err := errIfEntryShared(list.Items, cp, func(o *v1alpha1.ConnectionPool) bool {
+		return o.Spec.Project == cp.Spec.Project && o.Spec.ServiceName == cp.Spec.ServiceName && o.Name == cp.Name
+	}); err != nil {
+		return err
+	}
+
 	if err := r.avnGen.ServicePGBouncerDelete(ctx, cp.Spec.Project, cp.Spec.ServiceName, cp.Name); err != nil && !isNotFound(err) {
 		return err
 	}

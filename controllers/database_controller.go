@@ -90,6 +90,16 @@ func (r *DatabaseController) Delete(ctx context.Context, db *v1alpha1.Database) 
 		return errTerminationProtectionOn
 	}
 
+	var list v1alpha1.DatabaseList
+	if err := r.List(ctx, &list); err != nil {
+		return fmt.Errorf("listing Database resources: %w", err)
+	}
+	if err := errIfEntryShared(list.Items, db, func(o *v1alpha1.Database) bool {
+		return o.Spec.Project == db.Spec.Project && o.Spec.ServiceName == db.Spec.ServiceName && o.GetDatabaseName() == db.GetDatabaseName()
+	}); err != nil {
+		return err
+	}
+
 	err := r.avnGen.ServiceDatabaseDelete(ctx, db.Spec.Project, db.Spec.ServiceName, db.GetDatabaseName())
 	if err != nil && !isNotFound(err) {
 		return err

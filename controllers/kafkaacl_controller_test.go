@@ -348,4 +348,59 @@ func TestKafkaACLReconciler(t *testing.T) {
 		require.NoError(t, r.Get(t.Context(), types.NamespacedName{Name: acl.Name, Namespace: acl.Namespace}, got))
 		require.Equal(t, "own", got.Status.ID)
 	})
+
+	t.Run("Keeps the Aiven entry on deletion while another KafkaACL manages it", func(t *testing.T) {
+		acl := newKafkaACL(t)
+		acl.Generation = 1
+		acl.Status.ID = "shared-id"
+		acl.Finalizers = []string{instanceDeletionFinalizer}
+		now := metav1.Now()
+		acl.DeletionTimestamp = &now
+
+		other := newKafkaACL(t)
+		other.Name = "other"
+		other.Status.ID = "shared-id"
+
+		avn := avngen.NewMockClient(t) // ServiceKafkaAclDelete must not be called
+
+		r, _, err := runKafkaACLScenario(t, acl, avn, other)
+		require.NoError(t, err)
+
+		got := &v1alpha1.KafkaACL{}
+		err = r.Get(t.Context(), types.NamespacedName{Name: acl.Name, Namespace: acl.Namespace}, got)
+		require.True(t, apierrors.IsNotFound(err))
+	})
+	t.Run("Keeps an ACL another KafkaACL manages when the spec moves away from it", func(t *testing.T) {
+		acl := newKafkaACL(t)
+		acl.Generation = 2
+		acl.Annotations = map[string]string{processedGenerationAnnotation: "1"}
+		acl.Finalizers = []string{instanceDeletionFinalizer}
+		acl.Status.ID = "shared-admin"
+		acl.Spec.Permission = kafka.PermissionTypeRead
+
+		// Still at the old spec and adopted the same ACL.
+		other := newKafkaACL(t)
+		other.Name = "other"
+		other.Spec.Permission = kafka.PermissionTypeAdmin
+		other.Status.ID = "shared-admin"
+
+		avn := avngen.NewMockClient(t)
+		avn.EXPECT().
+			ServiceGet(mock.Anything, acl.Spec.Project, acl.Spec.ServiceName, mock.Anything).
+			Return(runningService(), nil).Once()
+		avn.EXPECT().
+			ServiceKafkaAclList(mock.Anything, acl.Spec.Project, acl.Spec.ServiceName).
+			Return([]kafka.ServiceKafkaAclListOut{
+				{Id: new("shared-admin"), Permission: kafka.PermissionTypeAdmin, Topic: acl.Spec.Topic, Username: acl.Spec.Username},
+				{Id: new("other-read"), Permission: kafka.PermissionTypeRead, Topic: acl.Spec.Topic, Username: acl.Spec.Username},
+			}, nil).Once()
+		// ServiceKafkaAclDelete must not be called.
+
+		r, _, err := runKafkaACLScenario(t, acl, avn, other)
+		require.NoError(t, err)
+
+		got := &v1alpha1.KafkaACL{}
+		require.NoError(t, r.Get(t.Context(), types.NamespacedName{Name: acl.Name, Namespace: acl.Namespace}, got))
+		require.Equal(t, "other-read", got.Status.ID)
+	})
 }

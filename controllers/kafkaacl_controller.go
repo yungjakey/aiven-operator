@@ -4,6 +4,7 @@ package controllers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	avngen "github.com/aiven/go-client-codegen"
@@ -52,7 +53,7 @@ func (r *KafkaACLController) Observe(ctx context.Context, acl *v1alpha1.KafkaACL
 	if acl.Status.ID != "" && acl.Status.ID != id {
 		// The spec moved onto another existing ACL. Remove the one this resource created first,
 		// otherwise it keeps granting the old permission.
-		if err := r.deleteACL(ctx, acl); err != nil {
+		if err := r.deleteOwnedACL(ctx, acl); err != nil {
 			return Observation{}, err
 		}
 	}
@@ -83,6 +84,34 @@ func (r *KafkaACLController) Update(ctx context.Context, acl *v1alpha1.KafkaACL)
 }
 
 func (r *KafkaACLController) Delete(ctx context.Context, acl *v1alpha1.KafkaACL) error {
+	if err := r.errIfShared(ctx, acl); err != nil {
+		return err
+	}
+	return r.deleteACL(ctx, acl)
+}
+
+// errIfShared returns errDeletionSkipped when another KafkaACL manages the ACL in Status.ID.
+func (r *KafkaACLController) errIfShared(ctx context.Context, acl *v1alpha1.KafkaACL) error {
+	if acl.Status.ID == "" {
+		return nil
+	}
+	var list v1alpha1.KafkaACLList
+	if err := r.List(ctx, &list); err != nil {
+		return fmt.Errorf("listing KafkaACL resources: %w", err)
+	}
+	return errIfEntryShared(list.Items, acl, func(o *v1alpha1.KafkaACL) bool {
+		return o.Spec.Project == acl.Spec.Project && o.Spec.ServiceName == acl.Spec.ServiceName && o.Status.ID == acl.Status.ID
+	})
+}
+
+// deleteOwnedACL deletes the ACL this resource points at, unless another KafkaACL still manages it.
+func (r *KafkaACLController) deleteOwnedACL(ctx context.Context, acl *v1alpha1.KafkaACL) error {
+	switch err := r.errIfShared(ctx, acl); {
+	case errors.Is(err, errDeletionSkipped):
+		return nil
+	case err != nil:
+		return err
+	}
 	return r.deleteACL(ctx, acl)
 }
 
@@ -90,7 +119,7 @@ func (r *KafkaACLController) Delete(ctx context.Context, acl *v1alpha1.KafkaACL)
 func (r *KafkaACLController) applyACL(ctx context.Context, acl *v1alpha1.KafkaACL) error {
 	delete(acl.GetAnnotations(), instanceIsRunningAnnotation)
 
-	if err := r.deleteACL(ctx, acl); err != nil {
+	if err := r.deleteOwnedACL(ctx, acl); err != nil {
 		return err
 	}
 

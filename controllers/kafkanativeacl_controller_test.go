@@ -299,6 +299,29 @@ func TestKafkaNativeACLReconciler(t *testing.T) {
 		require.True(t, apierrors.IsNotFound(err))
 	})
 
+	t.Run("Keeps the Aiven entry on deletion while another KafkaNativeACL manages it", func(t *testing.T) {
+		acl := newObjectFromYAML[v1alpha1.KafkaNativeACL](t, yamlKafkaNativeACL)
+		acl.Generation = 1
+		acl.Status.ID = "acl-123"
+		acl.Finalizers = []string{instanceDeletionFinalizer}
+		now := metav1.Now()
+		acl.DeletionTimestamp = &now
+
+		// Identical specs adopt the same entry.
+		other := newObjectFromYAML[v1alpha1.KafkaNativeACL](t, yamlKafkaNativeACL)
+		other.Name = "other"
+		other.Status.ID = "acl-123"
+
+		avn := avngen.NewMockClient(t) // ServiceKafkaNativeAclDelete must not be called
+
+		r, _, err := runKafkaNativeACLScenario(t, acl, avn, other)
+		require.NoError(t, err)
+
+		got := &v1alpha1.KafkaNativeACL{}
+		err = r.Get(t.Context(), types.NamespacedName{Name: acl.Name, Namespace: acl.Namespace}, got)
+		require.True(t, apierrors.IsNotFound(err))
+	})
+
 	t.Run("Treats 404 on delete as already deleted", func(t *testing.T) {
 		acl := newObjectFromYAML[v1alpha1.KafkaNativeACL](t, yamlKafkaNativeACL)
 		acl.Generation = 1

@@ -158,6 +158,16 @@ func (r *KafkaConnectorController) Update(ctx context.Context, conn *v1alpha1.Ka
 }
 
 func (r *KafkaConnectorController) Delete(ctx context.Context, conn *v1alpha1.KafkaConnector) error {
+	var list v1alpha1.KafkaConnectorList
+	if err := r.List(ctx, &list); err != nil {
+		return fmt.Errorf("listing KafkaConnector resources: %w", err)
+	}
+	if err := errIfEntryShared(list.Items, conn, func(o *v1alpha1.KafkaConnector) bool {
+		return o.Spec.Project == conn.Spec.Project && o.Spec.ServiceName == conn.Spec.ServiceName && o.Name == conn.Name
+	}); err != nil {
+		return err
+	}
+
 	err := r.avnGen.ServiceKafkaConnectDeleteConnector(ctx, conn.Spec.Project, conn.Spec.ServiceName, conn.Name)
 	if err != nil && !isNotFound(err) {
 		return fmt.Errorf("unable to delete kafka connector: %w", err)

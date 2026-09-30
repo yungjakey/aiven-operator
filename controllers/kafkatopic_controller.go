@@ -164,6 +164,16 @@ func (r *KafkaTopicController) Delete(ctx context.Context, topic *v1alpha1.Kafka
 		return errTerminationProtectionOn
 	}
 
+	var list v1alpha1.KafkaTopicList
+	if err := r.List(ctx, &list); err != nil {
+		return fmt.Errorf("listing KafkaTopic resources: %w", err)
+	}
+	if err := errIfEntryShared(list.Items, topic, func(o *v1alpha1.KafkaTopic) bool {
+		return o.Spec.Project == topic.Spec.Project && o.Spec.ServiceName == topic.Spec.ServiceName && o.GetTopicName() == topic.GetTopicName()
+	}); err != nil {
+		return err
+	}
+
 	err := r.avnGen.ServiceKafkaTopicDelete(ctx, topic.Spec.Project, topic.Spec.ServiceName, topic.GetTopicName())
 	if err != nil && !isNotFound(err) {
 		return err

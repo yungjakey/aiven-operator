@@ -349,6 +349,26 @@ func connectionSecretName(o objWithSecret) string {
 	return o.GetName()
 }
 
+// errIfEntryShared returns errDeletionSkipped when another live resource in items manages the same
+// Aiven entry as self: identical specs adopt the same entry, and deleting it would cut off the other one.
+func errIfEntryShared[T any, P interface {
+	*T
+	client.Object
+}](items []T, self client.Object, sameEntry func(P) bool) error {
+	for i := range items {
+		o := P(&items[i])
+		// A resource being deleted gives up the entry, unless it orphans it.
+		deleting := o.GetDeletionTimestamp() != nil && o.GetAnnotations()[deletionPolicyAnnotation] != deletionPolicyOrphan
+		if (o.GetNamespace() == self.GetNamespace() && o.GetName() == self.GetName()) || deleting {
+			continue
+		}
+		if sameEntry(o) {
+			return fmt.Errorf("%w: the Aiven entry is also managed by %s", errDeletionSkipped, client.ObjectKeyFromObject(o))
+		}
+	}
+	return nil
+}
+
 // getSecretPrefix returns user's prefix or kind name
 func getSecretPrefix(o objWithSecret) string {
 	target := o.GetConnInfoSecretTarget()
