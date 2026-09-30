@@ -2,6 +2,9 @@
 
 ## [MAJOR.MINOR.PATCH] - YYYY-MM-DD
 
+- Fix `ServiceUser` not pushing a changed `connInfoSecretSource` password when the secret watch
+  missed the change, e.g. while the operator was down
+
 ## v0.48.0 - 2026-10-01
 
 - **BREAKING**: `ServiceUser` now applies `spec.authentication` when creating Aiven users and

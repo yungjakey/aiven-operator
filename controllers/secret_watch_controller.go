@@ -4,6 +4,7 @@ package controllers
 
 import (
 	"context"
+	goerrors "errors"
 	"fmt"
 	"reflect"
 	"time"
@@ -88,16 +89,18 @@ func (c *SecretWatchController) Reconcile(ctx context.Context, req ctrl.Request)
 		"secret", req.NamespacedName,
 		"dependentCount", len(dependentResources))
 
-	// trigger reconciliation for each dependent resource
+	// trigger reconciliation for each dependent resource, failures are retried with backoff
+	var errs []error
 	for _, resource := range dependentResources {
 		if err = c.triggerReconciliation(ctx, resource); err != nil {
 			c.Log.Error(err, "failed to trigger reconciliation for resource",
 				"resource", types.NamespacedName{Name: resource.GetName(), Namespace: resource.GetNamespace()},
 				"kind", resource.GetObjectKind().GroupVersionKind().Kind)
+			errs = append(errs, err)
 		}
 	}
 
-	return ctrl.Result{}, nil
+	return ctrl.Result{}, goerrors.Join(errs...)
 }
 
 // SecretSourceResource defines an interface for resources that can have connInfoSecretSource

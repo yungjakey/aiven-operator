@@ -78,6 +78,12 @@ func (r *ServiceUserController) Observe(ctx context.Context, user *v1alpha1.Serv
 		return Observation{ResourceExists: true, ResourceUpToDate: false, SecretDetails: details}, nil
 	}
 
+	// The secret watch can miss a source change, e.g. while the operator is down, so compare it here.
+	// A source that can't be read is reported by Update, it doesn't make the user outdated.
+	if password, err := GetPasswordFromSecret(ctx, r.Client, user); err == nil && password != "" && password != u.Password {
+		return Observation{ResourceExists: true, ResourceUpToDate: false, SecretDetails: details}, nil
+	}
+
 	return Observation{
 		ResourceExists: true,
 		ResourceUpToDate: IsReadyToUse(user) &&
