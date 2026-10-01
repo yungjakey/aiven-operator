@@ -312,6 +312,43 @@ func TestKafkaQuotaReconciler(t *testing.T) {
 		require.Equal(t, "true", got.Annotations[instanceIsRunningAnnotation])
 	})
 
+	t.Run("Recreates KafkaQuota when a limit is removed from the spec", func(t *testing.T) {
+		quota := newObjectFromYAML[v1alpha1.KafkaQuota](t, yamlKafkaQuota)
+		quota.Generation = 2
+		quota.Annotations = map[string]string{processedGenerationAnnotation: "1"}
+		quota.Spec.RequestPercentage = nil
+
+		avn := avngen.NewMockClient(t)
+		avn.EXPECT().
+			ServiceGet(mock.Anything, quota.Spec.Project, quota.Spec.ServiceName, mock.Anything).
+			Return(runningService(), nil).Once()
+		avn.EXPECT().
+			ServiceKafkaQuotaDescribe(
+				mock.Anything, quota.Spec.Project, quota.Spec.ServiceName,
+				mock.Anything, mock.Anything,
+			).Return(&kafka.ServiceKafkaQuotaDescribeOut{
+			User:              new("test-user"),
+			ClientId:          new("test-client"),
+			ConsumerByteRate:  new(float64(1000)),
+			ProducerByteRate:  new(float64(2000)),
+			RequestPercentage: new(float64(50)),
+		}, nil).Once()
+		// Omitting a field in the upsert doesn't unset it, so the quota is deleted first.
+		deleteCall := avn.EXPECT().
+			ServiceKafkaQuotaDelete(mock.Anything, quota.Spec.Project, quota.Spec.ServiceName, mock.Anything, mock.Anything).
+			Return(nil).Once()
+		avn.EXPECT().
+			ServiceKafkaQuotaCreate(
+				mock.Anything, quota.Spec.Project, quota.Spec.ServiceName,
+				mock.MatchedBy(func(in *kafka.ServiceKafkaQuotaCreateIn) bool {
+					return in.RequestPercentage == nil && *in.ConsumerByteRate == 1000
+				}),
+			).Return(nil).Once().NotBefore(deleteCall)
+
+		_, _, err := runKafkaQuotaScenario(t, quota, avn)
+		require.NoError(t, err)
+	})
+
 	t.Run("Deletes KafkaQuota and removes finalizer on deletion", func(t *testing.T) {
 		quota := newObjectFromYAML[v1alpha1.KafkaQuota](t, yamlKafkaQuota)
 		quota.Generation = 1

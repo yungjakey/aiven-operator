@@ -24,6 +24,9 @@ import (
 type KafkaQuotaController struct {
 	client.Client
 	avnGen avngen.Client
+
+	// remote is the quota seen by Observe in this reconcile.
+	remote *kafka.ServiceKafkaQuotaDescribeOut
 }
 
 func newKafkaQuotaReconciler(c Controller) reconcilerType {
@@ -53,6 +56,7 @@ func (r *KafkaQuotaController) Observe(ctx context.Context, q *v1alpha1.KafkaQuo
 	if got.User == nil && got.ClientId == nil {
 		return Observation{ResourceExists: false}, nil
 	}
+	r.remote = got
 
 	meta.SetStatusCondition(&q.Status.Conditions,
 		getRunningCondition(metav1.ConditionTrue, "CheckRunning", "Instance is running on Aiven side"))
@@ -79,6 +83,17 @@ func (r *KafkaQuotaController) Create(ctx context.Context, q *v1alpha1.KafkaQuot
 
 func (r *KafkaQuotaController) Update(ctx context.Context, q *v1alpha1.KafkaQuota) (UpdateResult, error) {
 	delete(q.GetAnnotations(), instanceIsRunningAnnotation)
+
+	// The upsert leaves omitted limits untouched, so a limit removed from the spec needs a fresh quota.
+	if rm := r.remote; rm != nil &&
+		(rm.ConsumerByteRate != nil && q.Spec.ConsumerByteRate == nil ||
+			rm.ProducerByteRate != nil && q.Spec.ProducerByteRate == nil ||
+			rm.RequestPercentage != nil && q.Spec.RequestPercentage == nil) {
+		err := r.avnGen.ServiceKafkaQuotaDelete(ctx, q.Spec.Project, q.Spec.ServiceName, quotaSelector(q)...)
+		if err != nil && !isNotFound(err) {
+			return UpdateResult{}, fmt.Errorf("deleting Kafka quota to remove a limit: %w", err)
+		}
+	}
 	if err := r.applyQuota(ctx, q); err != nil {
 		return UpdateResult{}, err
 	}
