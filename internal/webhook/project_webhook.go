@@ -65,7 +65,8 @@ func (h *ProjectWebhook) ValidateDelete(_ context.Context, obj runtime.Object) (
 	in := obj.(*v1alpha1.Project)
 	projectlog.Info("validate delete", "name", in.Name)
 
-	if in.Spec.AccountID == "" && in.Status.EstimatedBalance != "0.00" {
+	// An empty balance means the project was never reconciled, so there is nothing to protect.
+	if in.Spec.AccountID == "" && in.Status.EstimatedBalance != "" && in.Status.EstimatedBalance != "0.00" {
 		return nil, errors.New("project with an open balance cannot be deleted")
 	}
 

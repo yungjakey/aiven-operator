@@ -2,6 +2,9 @@
 
 ## [MAJOR.MINOR.PATCH] - YYYY-MM-DD
 
+- Fix webhooks blocking deletion of service resources that set both `projectVpcId` and
+  `projectVPCRef`, and of `Project`s that were never reconciled
+
 ## v0.48.0 - 2026-10-01
 
 - **BREAKING**: `ServiceUser` now applies `spec.authentication` when creating Aiven users and
