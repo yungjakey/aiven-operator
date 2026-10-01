@@ -79,21 +79,30 @@ func (a *kafkaAdapter) newSecret(s *service.ServiceGetOut) *corev1.Secret {
 
 	prefix := getSecretPrefix(a)
 	stringData := map[string]string{
-		prefix + "HOST":                s.ServiceUriParams["host"],
-		prefix + "PORT":                s.ServiceUriParams["port"],
-		prefix + "PASSWORD":            password,
-		prefix + "USERNAME":            userName,
-		prefix + "ACCESS_CERT":         *s.ConnectionInfo.KafkaAccessCert,
-		prefix + "ACCESS_KEY":          *s.ConnectionInfo.KafkaAccessKey,
-		prefix + "REST_URI":            *s.ConnectionInfo.KafkaRestUri,
-		prefix + "SCHEMA_REGISTRY_URI": *s.ConnectionInfo.SchemaRegistryUri,
+		prefix + "HOST":     s.ServiceUriParams["host"],
+		prefix + "PORT":     s.ServiceUriParams["port"],
+		prefix + "PASSWORD": password,
+		prefix + "USERNAME": userName,
 		// todo: remove in future releases
-		"HOST":        s.ServiceUriParams["host"],
-		"PORT":        s.ServiceUriParams["port"],
-		"PASSWORD":    password,
-		"USERNAME":    userName,
-		"ACCESS_CERT": *s.ConnectionInfo.KafkaAccessCert,
-		"ACCESS_KEY":  *s.ConnectionInfo.KafkaAccessKey,
+		"HOST":     s.ServiceUriParams["host"],
+		"PORT":     s.ServiceUriParams["port"],
+		"PASSWORD": password,
+		"USERNAME": userName,
+	}
+
+	// Aiven omits these when the corresponding feature is not enabled on the service:
+	// the URIs when kafka_rest or schema_registry is off, the certificates when the
+	// service issues none. The whole object is absent for a service with no connection
+	// info at all. Such keys are left out of the secret rather than dereferenced.
+	if info := s.ConnectionInfo; info != nil {
+		addOptionalDetail(stringData, prefix+"ACCESS_CERT", info.KafkaAccessCert)
+		addOptionalDetail(stringData, prefix+"ACCESS_KEY", info.KafkaAccessKey)
+		addOptionalDetail(stringData, prefix+"REST_URI", info.KafkaRestUri)
+		addOptionalDetail(stringData, prefix+"SCHEMA_REGISTRY_URI", info.SchemaRegistryUri)
+
+		// todo: remove in future releases
+		addOptionalDetail(stringData, "ACCESS_CERT", info.KafkaAccessCert)
+		addOptionalDetail(stringData, "ACCESS_KEY", info.KafkaAccessKey)
 	}
 
 	addKafkaEndpointDetails(stringData, s.Components, prefix)
@@ -126,6 +135,13 @@ func (a *kafkaAdapter) performUpgradeTaskIfNeeded(_ context.Context, _ avngen.Cl
 
 func (a *kafkaAdapter) createOrUpdateServiceSpecific(_ context.Context, _ avngen.Client, _ *service.ServiceGetOut) error {
 	return nil
+}
+
+// addOptionalDetail sets key only when Aiven returned a value for it.
+func addOptionalDetail(details SecretDetails, key string, value *string) {
+	if value != nil {
+		details[key] = *value
+	}
 }
 
 func addKafkaEndpointDetails(details SecretDetails, components []service.ComponentOut, prefix string) {

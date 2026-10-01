@@ -2,6 +2,11 @@
 
 ## [MAJOR.MINOR.PATCH] - YYYY-MM-DD
 
+- Fix `Kafka` failing to reconcile when `kafka_rest` or `schema_registry` is disabled: the connection
+  secret no longer dereferences connection details Aiven omits for features that are not enabled.
+  `KAFKA_ACCESS_CERT`, `KAFKA_ACCESS_KEY`, `KAFKA_REST_URI` and `KAFKA_SCHEMA_REGISTRY_URI` are now
+  written only when the service reports them
+
 ## v0.48.0 - 2026-10-01
 
 - **BREAKING**: `ServiceUser` now applies `spec.authentication` when creating Aiven users and
