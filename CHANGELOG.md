@@ -2,6 +2,8 @@
 
 ## [MAJOR.MINOR.PATCH] - YYYY-MM-DD
 
+- Fix `--development=false` being ignored
+
 ## v0.48.0 - 2026-10-01
 
 - **BREAKING**: `ServiceUser` now applies `spec.authentication` when creating Aiven users and
