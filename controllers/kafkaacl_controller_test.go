@@ -96,14 +96,12 @@ func TestKafkaACLReconciler(t *testing.T) {
 		avn.EXPECT().
 			ServiceGet(mock.Anything, acl.Spec.Project, acl.Spec.ServiceName, mock.Anything).
 			Return(runningService(), nil).Once()
-		// Observe getID: no ACL exists yet.
+		// Observe: no ACL exists yet.
 		avn.EXPECT().
 			ServiceKafkaAclList(mock.Anything, acl.Spec.Project, acl.Spec.ServiceName).
 			Return(nil, nil).Once()
-		// applyACL -> deleteACL -> getID: still nothing to delete.
-		avn.EXPECT().
-			ServiceKafkaAclList(mock.Anything, acl.Spec.Project, acl.Spec.ServiceName).
-			Return(nil, nil).Once()
+		// applyACL does not list to find something to delete: this CR was never applied, so it
+		// owns no ACL and nothing may be resolved by content.
 		avn.EXPECT().
 			ServiceKafkaAclAdd(
 				mock.Anything, acl.Spec.Project, acl.Spec.ServiceName,
@@ -292,4 +290,79 @@ func TestKafkaACLReconciler(t *testing.T) {
 		require.Equal(t, "2", got.Annotations[processedGenerationAnnotation])
 		require.Equal(t, "true", got.Annotations[instanceIsRunningAnnotation])
 	})
+}
+
+// A KafkaACL whose Observe never completed — the service was not running yet, the token was
+// rejected, the API failed — has no Status.ID and no processed-generation annotation. Deleting it
+// must not resolve an ACL by (topic, username, permission) alone: the only entries that match are
+// ones created by hand or by another resource.
+func TestKafkaACLDeleteDoesNotTouchUnownedACLs(t *testing.T) {
+	t.Parallel()
+
+	acl := newKafkaACL(t)
+	acl.Generation = 1
+	acl.Finalizers = []string{instanceDeletionFinalizer}
+	now := metav1.Now()
+	acl.DeletionTimestamp = &now
+	// Never applied: no Status.ID, no processed-generation annotation.
+	require.Empty(t, acl.Status.ID)
+	require.False(t, wasEverApplied(acl))
+
+	avn := avngen.NewMockClient(t)
+	// Somebody else's ACL happens to match this spec. Listing it at all would be enough to go
+	// on and delete it, so the list is allowed but the delete is never registered: an
+	// unexpected ServiceKafkaAclDelete fails the test.
+	avn.EXPECT().
+		ServiceKafkaAclList(mock.Anything, acl.Spec.Project, acl.Spec.ServiceName).
+		Return([]kafka.ServiceKafkaAclListOut{{
+			Id:         new("someone-elses-acl"),
+			Permission: acl.Spec.Permission,
+			Topic:      acl.Spec.Topic,
+			Username:   acl.Spec.Username,
+		}}, nil).Maybe()
+
+	r, res, err := runKafkaACLScenario(t, acl, avn)
+	require.NoError(t, err)
+	require.Equal(t, ctrlruntime.Result{}, res)
+
+	// The finalizer is gone and the resource is deleted, without an ACL being removed.
+	got := &v1alpha1.KafkaACL{}
+	require.True(t, apierrors.IsNotFound(
+		r.Get(t.Context(), types.NamespacedName{Name: acl.Name, Namespace: acl.Namespace}, got)))
+}
+
+// An ACL created before v0.5.1 has no stored ID but was applied, so the content fallback still
+// has to resolve and delete it.
+func TestKafkaACLDeleteResolvesLegacyACLByContent(t *testing.T) {
+	t.Parallel()
+
+	acl := newKafkaACL(t)
+	acl.Generation = 1
+	acl.Finalizers = []string{instanceDeletionFinalizer}
+	now := metav1.Now()
+	acl.DeletionTimestamp = &now
+	// Applied by an older operator version, which stored no ID.
+	acl.Annotations = map[string]string{processedGenerationAnnotation: "1"}
+	require.Empty(t, acl.Status.ID)
+
+	avn := avngen.NewMockClient(t)
+	avn.EXPECT().
+		ServiceKafkaAclList(mock.Anything, acl.Spec.Project, acl.Spec.ServiceName).
+		Return([]kafka.ServiceKafkaAclListOut{{
+			Id:         new("legacy-acl"),
+			Permission: acl.Spec.Permission,
+			Topic:      acl.Spec.Topic,
+			Username:   acl.Spec.Username,
+		}}, nil).Once()
+	avn.EXPECT().
+		ServiceKafkaAclDelete(mock.Anything, acl.Spec.Project, acl.Spec.ServiceName, "legacy-acl").
+		Return(nil, nil).Once()
+
+	r, res, err := runKafkaACLScenario(t, acl, avn)
+	require.NoError(t, err)
+	require.Equal(t, ctrlruntime.Result{}, res)
+
+	got := &v1alpha1.KafkaACL{}
+	require.True(t, apierrors.IsNotFound(
+		r.Get(t.Context(), types.NamespacedName{Name: acl.Name, Namespace: acl.Namespace}, got)))
 }
