@@ -7,7 +7,12 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// A transition rule on an optional field is skipped whenever the field is absent, so it does
+// not block adding or removing that field. The spec-level rules below cover that.
+
 // ProjectSpec defines the desired state of Project
+// +kubebuilder:validation:XValidation:rule="has(self.billingGroupId) == has(oldSelf.billingGroupId) && (!has(self.billingGroupId) || self.billingGroupId == oldSelf.billingGroupId)",message="billingGroupId is immutable, including adding or removing it"
+// +kubebuilder:validation:XValidation:rule="has(self.copyFromProject) == has(oldSelf.copyFromProject) && (!has(self.copyFromProject) || self.copyFromProject == oldSelf.copyFromProject)",message="copyFromProject is immutable, including adding or removing it"
 type ProjectSpec struct {
 	AuthSecretRefField `json:",inline"`
 	SecretFields       `json:",inline"`

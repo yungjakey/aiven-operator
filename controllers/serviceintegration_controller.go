@@ -165,6 +165,9 @@ func (r *ServiceIntegrationController) Update(ctx context.Context, si *v1alpha1.
 		retry.RetryIf(isNotFound),
 		retry.Attempts(3), //nolint:mnd
 		retry.Delay(1*time.Second),
+		retry.Context(ctx),
+		// Keep the Aiven error unwrapped, so the reconciler can still classify it, e.g. as not found.
+		retry.LastErrorOnly(true),
 	)
 	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "user config not changed") {

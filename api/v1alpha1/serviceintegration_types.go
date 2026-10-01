@@ -28,8 +28,18 @@ type DestinationEndpointReference struct {
 	Name string `json:"name"`
 }
 
+// A transition rule on an optional field is skipped whenever the field is absent, so it does
+// not block adding or removing that field. The spec-level rules below cover that.
+
 // ServiceIntegrationSpec defines the desired state of ServiceIntegration
 // +kubebuilder:validation:XValidation:rule="!(has(self.destinationEndpointRef) && has(self.destinationEndpointId) && self.destinationEndpointId != \"\")",message="destinationEndpointId and destinationEndpointRef are mutually exclusive"
+// +kubebuilder:validation:XValidation:rule="has(self.sourceEndpointID) == has(oldSelf.sourceEndpointID) && (!has(self.sourceEndpointID) || self.sourceEndpointID == oldSelf.sourceEndpointID)",message="sourceEndpointID is immutable, including adding or removing it"
+// +kubebuilder:validation:XValidation:rule="has(self.sourceServiceName) == has(oldSelf.sourceServiceName) && (!has(self.sourceServiceName) || self.sourceServiceName == oldSelf.sourceServiceName)",message="sourceServiceName is immutable, including adding or removing it"
+// +kubebuilder:validation:XValidation:rule="has(self.sourceProjectName) == has(oldSelf.sourceProjectName) && (!has(self.sourceProjectName) || self.sourceProjectName == oldSelf.sourceProjectName)",message="sourceProjectName is immutable, including adding or removing it"
+// +kubebuilder:validation:XValidation:rule="has(self.destinationEndpointId) == has(oldSelf.destinationEndpointId) && (!has(self.destinationEndpointId) || self.destinationEndpointId == oldSelf.destinationEndpointId)",message="destinationEndpointId is immutable, including adding or removing it"
+// +kubebuilder:validation:XValidation:rule="has(self.destinationEndpointRef) == has(oldSelf.destinationEndpointRef) && (!has(self.destinationEndpointRef) || self.destinationEndpointRef == oldSelf.destinationEndpointRef)",message="destinationEndpointRef is immutable, including adding or removing it"
+// +kubebuilder:validation:XValidation:rule="has(self.destinationServiceName) == has(oldSelf.destinationServiceName) && (!has(self.destinationServiceName) || self.destinationServiceName == oldSelf.destinationServiceName)",message="destinationServiceName is immutable, including adding or removing it"
+// +kubebuilder:validation:XValidation:rule="has(self.destinationProjectName) == has(oldSelf.destinationProjectName) && (!has(self.destinationProjectName) || self.destinationProjectName == oldSelf.destinationProjectName)",message="destinationProjectName is immutable, including adding or removing it"
 type ServiceIntegrationSpec struct {
 	ProjectDependant `json:",inline"`
 
@@ -129,7 +139,7 @@ type ServiceIntegrationStatus struct {
 // +kubebuilder:printcolumn:name="Type",type="string",JSONPath=".spec.integrationType"
 // +kubebuilder:printcolumn:name="Source Service Name",type="string",JSONPath=".spec.sourceServiceName"
 // +kubebuilder:printcolumn:name="Destination Service Name",type="string",JSONPath=".spec.destinationServiceName"
-// +kubebuilder:printcolumn:name="Source Endpoint ID",type="string",JSONPath=".spec.sourceEndpointId"
+// +kubebuilder:printcolumn:name="Source Endpoint ID",type="string",JSONPath=".spec.sourceEndpointID"
 // +kubebuilder:printcolumn:name="Destination Endpoint ID",type="string",JSONPath=".spec.destinationEndpointId"
 type ServiceIntegration struct {
 	metav1.TypeMeta   `json:",inline"`

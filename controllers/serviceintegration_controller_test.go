@@ -522,6 +522,31 @@ spec:
 		require.Equal(t, "si-123", got.Status.ID)
 	})
 
+	t.Run("Keeps the Aiven error classifiable when update retries are exhausted", func(t *testing.T) {
+		const yaml = `
+apiVersion: aiven.io/v1alpha1
+kind: ServiceIntegration
+metadata:
+  name: test-si
+  namespace: default
+spec:
+  project: test-project
+  integrationType: datadog
+  datadog:
+    datadog_dbm_enabled: true
+`
+		si := newObjectFromYAML[v1alpha1.ServiceIntegration](t, yaml)
+		si.Status.ID = "si-123"
+
+		avn := avngen.NewMockClient(t)
+		avn.EXPECT().
+			ServiceIntegrationUpdate(mock.Anything, si.Spec.Project, si.Status.ID, mock.Anything).
+			Return(nil, newAivenError(404, "not found")).Times(3)
+
+		_, err := (&ServiceIntegrationController{avnGen: avn}).Update(t.Context(), si)
+		require.True(t, isNotFound(err), "got %v", err)
+	})
+
 	t.Run("Removes finalizer on deletion when ServiceIntegration has no external ID", func(t *testing.T) {
 		si := newObjectFromYAML[v1alpha1.ServiceIntegration](t, yamlServiceIntegrationAutoscalerLegacy)
 		si.Generation = 1
