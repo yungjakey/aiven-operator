@@ -352,6 +352,7 @@ spec:
                     and will replace metadata.name in future releases
                   maxLength: 249
                   minLength: 1
+                  pattern: ^[a-zA-Z0-9._-]+$
                   type: string
                   x-kubernetes-validations:
                     - message: Value is immutable

@@ -2,6 +2,11 @@
 
 ## [MAJOR.MINOR.PATCH] - YYYY-MM-DD
 
+- Fix `KafkaNativeACL` sending an explicitly empty `host` instead of leaving the `*` default to Aiven
+- Change `KafkaSchema` field `schema`: minLength `1`
+- Change `KafkaSchema` field `subjectName`: minLength `1`
+- Change `KafkaTopic` field `topicName`: pattern `^[a-zA-Z0-9._-]+$`
+
 ## v0.48.0 - 2026-10-01
 
 - **BREAKING**: `ServiceUser` now applies `spec.authentication` when creating Aiven users and
