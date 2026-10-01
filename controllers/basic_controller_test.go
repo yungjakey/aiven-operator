@@ -1,8 +1,10 @@
 package controllers
 
 import (
+	"encoding/json"
 	"testing"
 
+	"github.com/aiven/go-client-codegen/handler/service"
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -96,4 +98,11 @@ func TestInstanceReconcilerHelper_reconcile(t *testing.T) {
 		require.NotNil(t, cond)
 		require.Contains(t, cond.Message, "enable ProjectVPC")
 	})
+}
+
+func TestGetMaintenanceWindowOmitsUnsetTime(t *testing.T) {
+	// A pointer to "" is still sent, as an invalid "time": "" when only the day is set.
+	b, err := json.Marshal(getMaintenanceWindow(service.DowTypeMonday, ""))
+	require.NoError(t, err)
+	require.JSONEq(t, `{"dow":"monday"}`, string(b))
 }

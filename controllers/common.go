@@ -330,10 +330,11 @@ func newSecret(o objWithSecret, stringData map[string]string, addPrefix bool) *c
 	//  when legacy secrets removed
 	if addPrefix {
 		prefix := getSecretPrefix(o)
+		prefixed := make(map[string]string, len(stringData))
 		for k, v := range stringData {
-			delete(stringData, k)
-			stringData[prefix+k] = v
+			prefixed[prefix+k] = v
 		}
+		stringData = prefixed
 	}
 
 	return &corev1.Secret{

@@ -85,6 +85,10 @@ func (h *genericServiceHandler) createOrUpdate(ctx context.Context, avnGen avnge
 	}
 
 	diskSpace := v1alpha1.ConvertDiskSpace(o.getDiskSpace())
+	if diskSpace == 0 && o.getDiskSpace() != "" {
+		// A value without unit is read as bytes, rounds down to 0 MiB and would be silently dropped.
+		return fmt.Errorf("disk_space %q has no unit, use e.g. %sGiB", o.getDiskSpace(), o.getDiskSpace())
+	}
 	if diskSpace > 0 && exists {
 		for _, v := range oldService.ServiceIntegrations {
 			if v.IntegrationType == service.IntegrationTypeAutoscaler {
@@ -202,11 +206,25 @@ func (h *genericServiceHandler) delete(ctx context.Context, avnGen avngen.Client
 	//
 	// Note: the guard above already verifies that spec.terminationProtection is not true,
 	// so this only fires when the user has explicitly disabled or omitted TP.
-	terminationProtection := false
-	if _, err := avnGen.ServiceUpdate(ctx, spec.Project, o.getObjectMeta().Name, &service.ServiceUpdateIn{
-		TerminationProtection: &terminationProtection,
-	}); err != nil && !isNotFound(err) {
-		return false, fmt.Errorf("failed to disable termination protection before deletion: %w", err)
+	//
+	// ServiceUpdateIn always sends project_vpc_id, and null moves the service to the public network,
+	// so the current VPC is sent back as is.
+	s, err := avnGen.ServiceGet(ctx, spec.Project, o.getObjectMeta().Name)
+	if isNotFound(err) {
+		return true, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("failed to get service before deletion: %w", err)
+	}
+
+	if s.TerminationProtection {
+		terminationProtection := false
+		if _, err := avnGen.ServiceUpdate(ctx, spec.Project, o.getObjectMeta().Name, &service.ServiceUpdateIn{
+			ProjectVpcId:          NilIfZero(s.ProjectVpcId),
+			TerminationProtection: &terminationProtection,
+		}); err != nil && !isNotFound(err) {
+			return false, fmt.Errorf("failed to disable termination protection before deletion: %w", err)
+		}
 	}
 
 	err = avnGen.ServiceDelete(ctx, spec.Project, o.getObjectMeta().Name)

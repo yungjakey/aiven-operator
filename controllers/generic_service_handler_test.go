@@ -59,7 +59,11 @@ func TestGenericServiceHandlerDelete(t *testing.T) {
 
 		avn := avngen.NewMockClient(t)
 		avn.EXPECT().
+			ServiceGet(mock.Anything, pg.Spec.Project, pg.Name).
+			Return(&service.ServiceGetOut{TerminationProtection: true, ProjectVpcId: "vpc-id"}, nil).Once()
+		avn.EXPECT().
 			ServiceUpdate(mock.Anything, pg.Spec.Project, pg.Name, &service.ServiceUpdateIn{
+				ProjectVpcId:          new("vpc-id"),
 				TerminationProtection: &disabled,
 			}).
 			Return(nil, nil).Once()
@@ -81,7 +85,11 @@ func TestGenericServiceHandlerDelete(t *testing.T) {
 		disabled := false
 		avn := avngen.NewMockClient(t)
 		avn.EXPECT().
+			ServiceGet(mock.Anything, pg.Spec.Project, pg.Name).
+			Return(&service.ServiceGetOut{TerminationProtection: true, ProjectVpcId: "vpc-id"}, nil).Once()
+		avn.EXPECT().
 			ServiceUpdate(mock.Anything, pg.Spec.Project, pg.Name, &service.ServiceUpdateIn{
+				ProjectVpcId:          new("vpc-id"),
 				TerminationProtection: &disabled,
 			}).
 			Return(nil, nil).Once()
@@ -103,6 +111,9 @@ func TestGenericServiceHandlerDelete(t *testing.T) {
 
 		avn := avngen.NewMockClient(t)
 		avn.EXPECT().
+			ServiceGet(mock.Anything, pg.Spec.Project, pg.Name).
+			Return(&service.ServiceGetOut{TerminationProtection: true, ProjectVpcId: "vpc-id"}, nil).Once()
+		avn.EXPECT().
 			ServiceUpdate(mock.Anything, pg.Spec.Project, pg.Name, mock.Anything).
 			Return(nil, avngen.Error{Status: http.StatusNotFound, Message: "Service not found"}).Once()
 		avn.EXPECT().
@@ -123,6 +134,9 @@ func TestGenericServiceHandlerDelete(t *testing.T) {
 
 		avn := avngen.NewMockClient(t)
 		avn.EXPECT().
+			ServiceGet(mock.Anything, pg.Spec.Project, pg.Name).
+			Return(&service.ServiceGetOut{TerminationProtection: true, ProjectVpcId: "vpc-id"}, nil).Once()
+		avn.EXPECT().
 			ServiceUpdate(mock.Anything, pg.Spec.Project, pg.Name, mock.Anything).
 			Return(nil, avngen.Error{Status: http.StatusForbidden, Message: "Forbidden"}).Once()
 		// ServiceDelete should NOT be called.
@@ -140,6 +154,9 @@ func TestGenericServiceHandlerDelete(t *testing.T) {
 		pg := newPG(&disabled)
 
 		avn := avngen.NewMockClient(t)
+		avn.EXPECT().
+			ServiceGet(mock.Anything, pg.Spec.Project, pg.Name).
+			Return(&service.ServiceGetOut{TerminationProtection: true, ProjectVpcId: "vpc-id"}, nil).Once()
 		avn.EXPECT().
 			ServiceUpdate(mock.Anything, pg.Spec.Project, pg.Name, mock.Anything).
 			Return(nil, nil).Once()
@@ -163,8 +180,12 @@ func TestGenericServiceHandlerDelete(t *testing.T) {
 		pg := newPG(&disabled)
 
 		avn := avngen.NewMockClient(t)
+		avn.EXPECT().
+			ServiceGet(mock.Anything, pg.Spec.Project, pg.Name).
+			Return(&service.ServiceGetOut{TerminationProtection: true, ProjectVpcId: "vpc-id"}, nil).Once()
 		updateCall := avn.EXPECT().
 			ServiceUpdate(mock.Anything, pg.Spec.Project, pg.Name, &service.ServiceUpdateIn{
+				ProjectVpcId:          new("vpc-id"),
 				TerminationProtection: &disabled,
 			}).
 			Return(nil, nil).Once()
@@ -172,6 +193,41 @@ func TestGenericServiceHandlerDelete(t *testing.T) {
 			ServiceDelete(mock.Anything, pg.Spec.Project, pg.Name).
 			Return(nil).Once().
 			NotBefore(updateCall)
+
+		h := newHandler()
+		finalised, err := h.delete(t.Context(), avn, pg)
+		require.True(t, finalised)
+		require.NoError(t, err)
+	})
+
+	t.Run("Skips the termination protection update when Aiven has it disabled", func(t *testing.T) {
+		t.Parallel()
+
+		pg := newPG(nil)
+
+		avn := avngen.NewMockClient(t)
+		avn.EXPECT().
+			ServiceGet(mock.Anything, pg.Spec.Project, pg.Name).
+			Return(&service.ServiceGetOut{ProjectVpcId: "vpc-id"}, nil).Once()
+		avn.EXPECT().
+			ServiceDelete(mock.Anything, pg.Spec.Project, pg.Name).
+			Return(nil).Once()
+
+		h := newHandler()
+		finalised, err := h.delete(t.Context(), avn, pg)
+		require.True(t, finalised)
+		require.NoError(t, err)
+	})
+
+	t.Run("Finalises when the service is already gone", func(t *testing.T) {
+		t.Parallel()
+
+		pg := newPG(nil)
+
+		avn := avngen.NewMockClient(t)
+		avn.EXPECT().
+			ServiceGet(mock.Anything, pg.Spec.Project, pg.Name).
+			Return(nil, avngen.Error{Status: http.StatusNotFound, Message: "Service not found"}).Once()
 
 		h := newHandler()
 		finalised, err := h.delete(t.Context(), avn, pg)
@@ -557,4 +613,20 @@ func TestServiceVersion(t *testing.T) {
 	assert.Empty(t, serviceVersion(serviceTypePostgreSQL, metadata))
 	assert.Empty(t, serviceVersion(serviceTypeKafkaConnect, metadata))
 	assert.Empty(t, serviceVersion(serviceTypeValkey, nil))
+}
+
+func TestCreateOrUpdateRejectsDiskSpaceWithoutUnit(t *testing.T) {
+	t.Parallel()
+
+	pg := newObjectFromYAML[v1alpha1.PostgreSQL](t, yamlPostgres)
+	pg.Spec.DiskSpace = "100"
+
+	avn := avngen.NewMockClient(t)
+	avn.EXPECT().
+		ServiceGet(mock.Anything, pg.Spec.Project, pg.Name).
+		Return(&service.ServiceGetOut{}, nil).Once()
+
+	h := &genericServiceHandler{fabric: newPostgreSQLAdapterFactory(nil), log: logr.Discard()}
+	err := h.createOrUpdate(t.Context(), avn, pg, nil)
+	require.ErrorContains(t, err, "has no unit")
 }
