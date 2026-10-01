@@ -1097,6 +1097,55 @@ func TestServiceUserReconciler(t *testing.T) {
 		require.Equal(t, []byte(srcPassword), secret.Data["SERVICEUSER_PASSWORD"])
 	})
 
+	t.Run("Source secret password differing from Aiven heals via Update", func(t *testing.T) {
+		user := newObjectFromYAML[v1alpha1.ServiceUser](t, yamlServiceUser)
+		user.Generation = 1
+		user.Annotations = map[string]string{
+			processedGenerationAnnotation: "1",
+			instanceIsRunningAnnotation:   "true",
+		}
+		user.Spec.ConnInfoSecretSource = &v1alpha1.ConnInfoSecretSource{Name: "src", PasswordKey: "PASSWORD"}
+
+		srcPassword := "external-secret-password"
+		src := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: "src", Namespace: user.Namespace},
+			Data:       map[string][]byte{"PASSWORD": []byte(srcPassword)},
+		}
+
+		avn := avngen.NewMockClient(t)
+		avn.EXPECT().
+			ServiceGet(mock.Anything, user.Spec.Project, user.Spec.ServiceName, mock.Anything).
+			Return(&service.ServiceGetOut{
+				State:       service.ServiceStateTypeRunning,
+				ServiceType: "kafka",
+				Components:  []service.ComponentOut{{Component: "kafka", Host: "host", Port: 9092}},
+			}, nil).Twice()
+		// Observe sees the old password: the source secret changed while the secret watch missed it.
+		avn.EXPECT().
+			ServiceUserGet(mock.Anything, user.Spec.Project, user.Spec.ServiceName, user.Name).
+			Return(&service.ServiceUserGetOut{Username: user.Name, Password: "previous-password"}, nil).Once()
+		// Update pushes the source-secret password.
+		avn.EXPECT().
+			ServiceUserCredentialsModify(mock.Anything, user.Spec.Project, user.Spec.ServiceName, user.Name, mock.MatchedBy(func(in *service.ServiceUserCredentialsModifyIn) bool {
+				return in.NewPassword != nil && *in.NewPassword == srcPassword &&
+					in.Operation == service.ServiceUserCredentialsModifyOperationTypeResetCredentials
+			})).
+			Return(&service.ServiceUserCredentialsModifyOut{}, nil).Once()
+		// Post-Update fetch sees the populated password.
+		avn.EXPECT().
+			ServiceUserGet(mock.Anything, user.Spec.Project, user.Spec.ServiceName, user.Name).
+			Return(&service.ServiceUserGetOut{Username: user.Name, Password: srcPassword}, nil).Once()
+		avn.EXPECT().
+			ProjectKmsGetCA(mock.Anything, user.Spec.Project).Return("ca", nil).Twice()
+
+		r, res := runScenario(t, user, avn, src)
+		require.Equal(t, ctrlruntime.Result{RequeueAfter: testPollInterval}, res)
+
+		secret := &corev1.Secret{}
+		require.NoError(t, r.Get(t.Context(), types.NamespacedName{Name: user.Name, Namespace: user.Namespace}, secret))
+		require.Equal(t, []byte(srcPassword), secret.Data["SERVICEUSER_PASSWORD"])
+	})
+
 	t.Run("Leaves authentication unchanged when the spec omits it", func(t *testing.T) {
 		user := newObjectFromYAML[v1alpha1.ServiceUser](t, yamlServiceUser)
 		user.Generation = 1

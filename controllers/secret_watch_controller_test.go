@@ -16,6 +16,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 
 	"github.com/aiven/aiven-operator/api/v1alpha1"
@@ -532,4 +533,39 @@ func TestSecretWatchController_findResourcesUsingSecret(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, []string{"ClickhouseUser/chu"}, names(res))
 	})
+}
+
+func TestSecretWatchController_ReconcileRetriesFailedTriggers(t *testing.T) {
+	t.Parallel()
+
+	scheme := runtime.NewScheme()
+	require.NoError(t, clientgoscheme.AddToScheme(scheme))
+	require.NoError(t, v1alpha1.AddToScheme(scheme))
+
+	user := &v1alpha1.ServiceUser{
+		ObjectMeta: metav1.ObjectMeta{Name: "su", Namespace: "default"},
+		Spec: v1alpha1.ServiceUserSpec{
+			ConnInfoSecretSource: &v1alpha1.ConnInfoSecretSource{Name: "my-secret", PasswordKey: "password"},
+		},
+	}
+	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "my-secret", Namespace: "default"}}
+
+	c := &SecretWatchController{
+		Client: fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithObjects(user, secret).
+			WithIndex(&v1alpha1.ServiceUser{}, connInfoSecretRefIndexKey, connInfoSecretRefIndexFunc).
+			WithInterceptorFuncs(interceptor.Funcs{
+				Patch: func(context.Context, client.WithWatch, client.Object, client.Patch, ...client.PatchOption) error {
+					return assert.AnError
+				},
+			}).
+			Build(),
+		Log:     ctrl.Log.WithName("test"),
+		Sources: kindSet{"ServiceUser": true}.secretSources(),
+	}
+
+	// A dropped trigger leaves Aiven with the old password, so the request must be retried.
+	_, err := c.Reconcile(t.Context(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(secret)})
+	require.ErrorIs(t, err, assert.AnError)
 }
