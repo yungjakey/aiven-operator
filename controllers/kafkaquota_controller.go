@@ -91,6 +91,17 @@ func (r *KafkaQuotaController) Update(ctx context.Context, q *v1alpha1.KafkaQuot
 }
 
 func (r *KafkaQuotaController) Delete(ctx context.Context, q *v1alpha1.KafkaQuota) error {
+	var list v1alpha1.KafkaQuotaList
+	if err := r.List(ctx, &list); err != nil {
+		return fmt.Errorf("listing KafkaQuota resources: %w", err)
+	}
+	if err := errIfEntryShared(list.Items, q, func(o *v1alpha1.KafkaQuota) bool {
+		return o.Spec.Project == q.Spec.Project && o.Spec.ServiceName == q.Spec.ServiceName &&
+			o.Spec.User == q.Spec.User && o.Spec.ClientID == q.Spec.ClientID
+	}); err != nil {
+		return err
+	}
+
 	err := r.avnGen.ServiceKafkaQuotaDelete(ctx, q.Spec.Project, q.Spec.ServiceName, quotaSelector(q)...)
 	if err != nil && !isNotFound(err) {
 		return err

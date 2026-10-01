@@ -10,6 +10,7 @@ import (
 	"github.com/aiven/go-client-codegen/handler/vpc"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/aiven/aiven-operator/api/v1alpha1"
 )
@@ -25,14 +26,15 @@ var isDependencyError = v1alpha1.ErrorSubstrChecker(
 
 // ProjectVPCController reconciles a ProjectVPC object.
 type ProjectVPCController struct {
+	client.Client
 	avnGen avngen.Client
 }
 
 func newProjectVPCReconciler(c Controller) reconcilerType {
 	return newManagedReconciler(
 		c,
-		func(_ Controller, avnGen avngen.Client) AivenController[*v1alpha1.ProjectVPC] {
-			return &ProjectVPCController{avnGen: avnGen}
+		func(c Controller, avnGen avngen.Client) AivenController[*v1alpha1.ProjectVPC] {
+			return &ProjectVPCController{Client: c.Client, avnGen: avnGen}
 		},
 		nil,
 	)
@@ -142,6 +144,16 @@ func (r *ProjectVPCController) Delete(ctx context.Context, projectVPC *v1alpha1.
 	// Nothing was ever created on Aiven side.
 	if projectVPC.Status.ID == "" {
 		return nil
+	}
+
+	var list v1alpha1.ProjectVPCList
+	if err := r.List(ctx, &list); err != nil {
+		return fmt.Errorf("listing ProjectVPC resources: %w", err)
+	}
+	if err := errIfEntryShared(list.Items, projectVPC, func(o *v1alpha1.ProjectVPC) bool {
+		return o.Spec.Project == projectVPC.Spec.Project && o.Status.ID == projectVPC.Status.ID
+	}); err != nil {
+		return err
 	}
 
 	avnVpc, err := r.avnGen.VpcGet(ctx, projectVPC.Spec.Project, projectVPC.Status.ID)

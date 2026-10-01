@@ -450,6 +450,16 @@ func (r *KafkaSchemaController) Delete(ctx context.Context, schema *v1alpha1.Kaf
 			v1alpha1.ErrDeleteDependencies, strings.Join(dependents, ", "))
 	}
 
+	var list v1alpha1.KafkaSchemaList
+	if err := r.List(ctx, &list); err != nil {
+		return fmt.Errorf("listing KafkaSchema resources: %w", err)
+	}
+	if err := errIfEntryShared(list.Items, schema, func(o *v1alpha1.KafkaSchema) bool {
+		return o.Spec.Project == schema.Spec.Project && o.Spec.ServiceName == schema.Spec.ServiceName && o.Spec.SubjectName == schema.Spec.SubjectName
+	}); err != nil {
+		return err
+	}
+
 	// Two-step delete: soft-delete first, then hard-delete.
 	// The schema registry requires this ordering — a hard-delete is only
 	// allowed after a soft-delete on the same subject.

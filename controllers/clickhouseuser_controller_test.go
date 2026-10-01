@@ -800,6 +800,10 @@ func TestClickhouseUserController_Update(t *testing.T) {
 func TestClickhouseUserController_Delete(t *testing.T) {
 	t.Parallel()
 
+	scheme := runtime.NewScheme()
+	require.NoError(t, v1alpha1.AddToScheme(scheme))
+	k8s := fake.NewClientBuilder().WithScheme(scheme).Build()
+
 	t.Run("No-op when UUID is empty", func(t *testing.T) {
 		user := newObjectFromYAML[v1alpha1.ClickhouseUser](t, yamlClickhouseUser)
 
@@ -831,6 +835,7 @@ func TestClickhouseUserController_Delete(t *testing.T) {
 		avn := avngen.NewMockClient(t)
 
 		ctrl := &ClickhouseUserController{
+			Client: k8s,
 			avnGen: avn,
 		}
 
@@ -852,6 +857,7 @@ func TestClickhouseUserController_Delete(t *testing.T) {
 			Once()
 
 		ctrl := &ClickhouseUserController{
+			Client: k8s,
 			avnGen: avn,
 		}
 
@@ -871,6 +877,7 @@ func TestClickhouseUserController_Delete(t *testing.T) {
 			Once()
 
 		ctrl := &ClickhouseUserController{
+			Client: k8s,
 			avnGen: avn,
 		}
 
@@ -890,6 +897,7 @@ func TestClickhouseUserController_Delete(t *testing.T) {
 			Once()
 
 		ctrl := &ClickhouseUserController{
+			Client: k8s,
 			avnGen: avn,
 		}
 
@@ -909,6 +917,7 @@ func TestClickhouseUserController_Delete(t *testing.T) {
 			Once()
 
 		ctrl := &ClickhouseUserController{
+			Client: k8s,
 			avnGen: avn,
 		}
 

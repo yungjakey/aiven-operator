@@ -346,6 +346,26 @@ func TestKafkaSchemaReconciler(t *testing.T) {
 		require.True(t, apierrors.IsNotFound(err))
 	})
 
+	t.Run("Keeps the subject on deletion while another KafkaSchema manages it", func(t *testing.T) {
+		schema := newObjectFromYAML[v1alpha1.KafkaSchema](t, yamlKafkaSchema)
+		schema.Generation = 1
+		schema.Finalizers = []string{instanceDeletionFinalizer}
+		now := metav1.Now()
+		schema.DeletionTimestamp = &now
+
+		other := newObjectFromYAML[v1alpha1.KafkaSchema](t, yamlKafkaSchema)
+		other.Name = "other"
+
+		avn := avngen.NewMockClient(t) // ServiceSchemaRegistrySubjectDelete must not be called
+
+		r, _, err := runKafkaSchemaScenario(t, schema, avn, other)
+		require.NoError(t, err)
+
+		got := &v1alpha1.KafkaSchema{}
+		err = r.Get(t.Context(), types.NamespacedName{Name: schema.Name, Namespace: schema.Namespace}, got)
+		require.True(t, apierrors.IsNotFound(err))
+	})
+
 	t.Run("Resolves kafkaSchemaRef from referent spec and status", func(t *testing.T) {
 		referent := &v1alpha1.KafkaSchema{
 			ObjectMeta: metav1.ObjectMeta{

@@ -31,7 +31,7 @@ func TestDatabaseReconciler(t *testing.T) {
 		return db
 	}
 
-	runScenarioErr := func(t *testing.T, db *v1alpha1.Database, avn avngen.Client) (*Reconciler[*v1alpha1.Database], ctrlruntime.Result, error) {
+	runScenarioErr := func(t *testing.T, db *v1alpha1.Database, avn avngen.Client, additionalObjects ...client.Object) (*Reconciler[*v1alpha1.Database], ctrlruntime.Result, error) {
 		t.Helper()
 
 		scheme := runtime.NewScheme()
@@ -42,7 +42,7 @@ func TestDatabaseReconciler(t *testing.T) {
 			Client: fake.NewClientBuilder().
 				WithScheme(scheme).
 				WithStatusSubresource(&v1alpha1.Database{}).
-				WithObjects([]client.Object{db}...).
+				WithObjects(append([]client.Object{db}, additionalObjects...)...).
 				Build(),
 			Scheme:       scheme,
 			Recorder:     record.NewFakeRecorder(10),
@@ -156,6 +156,27 @@ func TestDatabaseReconciler(t *testing.T) {
 		require.NoError(t, r.Get(t.Context(), types.NamespacedName{Name: db.Name, Namespace: db.Namespace}, got))
 		require.Equal(t, "true", got.Annotations[instanceIsRunningAnnotation])
 		require.Equal(t, "1", got.Annotations[processedGenerationAnnotation])
+	})
+
+	t.Run("Keeps the database on deletion while another Database manages it", func(t *testing.T) {
+		db := newDatabase(t)
+		db.Generation = 1
+		db.Finalizers = []string{instanceDeletionFinalizer}
+		now := metav1.Now()
+		db.DeletionTimestamp = &now
+
+		other := newDatabase(t)
+		other.Name = "other"
+		other.Spec.DatabaseName = db.GetDatabaseName()
+
+		avn := avngen.NewMockClient(t) // the database must not be dropped
+
+		r, _, err := runScenarioErr(t, db, avn, other)
+		require.NoError(t, err)
+
+		got := &v1alpha1.Database{}
+		err = r.Get(t.Context(), types.NamespacedName{Name: db.Name, Namespace: db.Namespace}, got)
+		require.True(t, apierrors.IsNotFound(err))
 	})
 
 	t.Run("Deletes database and removes finalizer on deletion", func(t *testing.T) {

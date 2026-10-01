@@ -44,25 +44,28 @@ func (r *KafkaSchemaRegistryACLController) Observe(ctx context.Context, acl *v1a
 		return Observation{}, fmt.Errorf("cannot list KafkaSchemaRegistryACLs on Aiven side: %w", err)
 	}
 
-	for _, existing := range list {
-		if existing.Id == nil || !schemaRegistrySpecMatches(acl.Spec, existing) {
-			continue
+	// Prefer the entry this CR owns over an identical one, e.g. created by another CR.
+	var id string
+	for _, a := range list {
+		if a.Id != nil && schemaRegistrySpecMatches(acl.Spec, a) && (id == "" || *a.Id == acl.Status.ACLId) {
+			id = *a.Id
 		}
-
-		if acl.Status.ACLId != *existing.Id {
-			// Adopting an entry this CR did not create.
-			logr.FromContextOrDiscard(ctx).Info("adopting existing KafkaSchemaRegistryACL",
-				"aclID", *existing.Id)
-			acl.Status.ACLId = *existing.Id
-		}
-
-		markInstanceRunning(acl)
-
-		// Spec fields are immutable, so an existing ACL is always up to date.
-		return Observation{ResourceExists: true, ResourceUpToDate: true}, nil
 	}
 
-	return Observation{ResourceExists: false}, nil
+	if id == "" {
+		return Observation{ResourceExists: false}, nil
+	}
+
+	if acl.Status.ACLId != id {
+		// Adopting an entry this CR did not create.
+		logr.FromContextOrDiscard(ctx).Info("adopting existing KafkaSchemaRegistryACL", "aclID", id)
+		acl.Status.ACLId = id
+	}
+
+	markInstanceRunning(acl)
+
+	// Spec fields are immutable, so an existing ACL is always up to date.
+	return Observation{ResourceExists: true, ResourceUpToDate: true}, nil
 }
 
 func (r *KafkaSchemaRegistryACLController) Create(ctx context.Context, acl *v1alpha1.KafkaSchemaRegistryACL) (CreateResult, error) {
@@ -84,6 +87,16 @@ func (r *KafkaSchemaRegistryACLController) Update(_ context.Context, _ *v1alpha1
 func (r *KafkaSchemaRegistryACLController) Delete(ctx context.Context, acl *v1alpha1.KafkaSchemaRegistryACL) error {
 	if acl.Status.ACLId == "" {
 		return nil
+	}
+
+	var list v1alpha1.KafkaSchemaRegistryACLList
+	if err := r.List(ctx, &list); err != nil {
+		return fmt.Errorf("listing KafkaSchemaRegistryACL resources: %w", err)
+	}
+	if err := errIfEntryShared(list.Items, acl, func(o *v1alpha1.KafkaSchemaRegistryACL) bool {
+		return o.Spec.Project == acl.Spec.Project && o.Spec.ServiceName == acl.Spec.ServiceName && o.Status.ACLId == acl.Status.ACLId
+	}); err != nil {
+		return err
 	}
 
 	_, err := r.avnGen.ServiceSchemaRegistryAclDelete(ctx, acl.Spec.Project, acl.Spec.ServiceName, acl.Status.ACLId)

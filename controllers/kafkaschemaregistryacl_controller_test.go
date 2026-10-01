@@ -340,6 +340,50 @@ func TestKafkaSchemaRegistryACLReconciler(t *testing.T) {
 		require.Equal(t, "1", got.Annotations[processedGenerationAnnotation])
 		require.Equal(t, "true", got.Annotations[instanceIsRunningAnnotation])
 	})
+
+	t.Run("Keeps its own KafkaSchemaRegistryACL when a duplicate entry matches the spec", func(t *testing.T) {
+		acl := newKafkaSchemaRegistryACL(t)
+		acl.Generation = 1
+		acl.Annotations = map[string]string{processedGenerationAnnotation: "1"}
+		acl.Status.ACLId = "own"
+
+		avn := avngen.NewMockClient(t)
+		avn.EXPECT().
+			ServiceGet(mock.Anything, acl.Spec.Project, acl.Spec.ServiceName, mock.Anything).
+			Return(runningService(), nil).Once()
+		avn.EXPECT().
+			ServiceSchemaRegistryAclList(mock.Anything, acl.Spec.Project, acl.Spec.ServiceName).
+			Return(append(schemaRegistryACLListWith(acl, "duplicate"), schemaRegistryACLListWith(acl, "own")...), nil).Once()
+
+		r, _, err := runKafkaSchemaRegistryACLScenario(t, acl, avn)
+		require.NoError(t, err)
+
+		got := &v1alpha1.KafkaSchemaRegistryACL{}
+		require.NoError(t, r.Get(t.Context(), types.NamespacedName{Name: acl.Name, Namespace: acl.Namespace}, got))
+		require.Equal(t, "own", got.Status.ACLId)
+	})
+
+	t.Run("Keeps the Aiven entry on deletion while another KafkaSchemaRegistryACL manages it", func(t *testing.T) {
+		acl := newKafkaSchemaRegistryACL(t)
+		acl.Generation = 1
+		acl.Status.ACLId = "shared-id"
+		acl.Finalizers = []string{instanceDeletionFinalizer}
+		now := metav1.Now()
+		acl.DeletionTimestamp = &now
+
+		other := newKafkaSchemaRegistryACL(t)
+		other.Name = "other"
+		other.Status.ACLId = "shared-id"
+
+		avn := avngen.NewMockClient(t) // ServiceSchemaRegistryAclDelete must not be called
+
+		r, _, err := runKafkaSchemaRegistryACLScenario(t, acl, avn, other)
+		require.NoError(t, err)
+
+		got := &v1alpha1.KafkaSchemaRegistryACL{}
+		err = r.Get(t.Context(), types.NamespacedName{Name: acl.Name, Namespace: acl.Namespace}, got)
+		require.True(t, apierrors.IsNotFound(err))
+	})
 }
 
 func TestSchemaRegistrySpecMatches(t *testing.T) {

@@ -413,6 +413,29 @@ func TestKafkaTopicReconciler(t *testing.T) {
 		require.Contains(t, got.Finalizers, instanceDeletionFinalizer)
 	})
 
+	t.Run("Keeps the topic on deletion while another KafkaTopic manages it", func(t *testing.T) {
+		topic := newObjectFromYAML[v1alpha1.KafkaTopic](t, yamlKafkaTopic)
+		topic.Generation = 1
+		topic.Finalizers = []string{instanceDeletionFinalizer}
+		now := metav1.Now()
+		topic.DeletionTimestamp = &now
+
+		// Another resource, e.g. in another namespace, names the same topic.
+		other := newObjectFromYAML[v1alpha1.KafkaTopic](t, yamlKafkaTopic)
+		other.Name = "other"
+		other.Namespace = "other"
+		other.Spec.TopicName = topic.GetTopicName()
+
+		avn := avngen.NewMockClient(t) // ServiceKafkaTopicDelete must not be called
+
+		r, _, err := runScenario(t, topic, avn, other)
+		require.NoError(t, err)
+
+		got := &v1alpha1.KafkaTopic{}
+		err = r.Get(t.Context(), types.NamespacedName{Name: topic.Name, Namespace: topic.Namespace}, got)
+		require.True(t, apierrors.IsNotFound(err))
+	})
+
 	t.Run("Deletes KafkaTopic and removes finalizer on deletion", func(t *testing.T) {
 		topic := newObjectFromYAML[v1alpha1.KafkaTopic](t, yamlKafkaTopic)
 		topic.Generation = 1

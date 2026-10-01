@@ -477,6 +477,26 @@ func TestKafkaConnectorReconciler(t *testing.T) {
 		require.True(t, apierrors.IsNotFound(err))
 	})
 
+	t.Run("Keeps the connector on deletion while another KafkaConnector manages it", func(t *testing.T) {
+		conn := newKafkaConnector(t)
+		conn.Generation = 1
+		conn.Finalizers = []string{instanceDeletionFinalizer}
+		now := metav1.Now()
+		conn.DeletionTimestamp = &now
+
+		// The connector name is the resource name, so the same name in another namespace is the same connector.
+		other := newKafkaConnector(t)
+		other.Namespace = "other"
+
+		avn := avngen.NewMockClient(t) // ServiceKafkaConnectDeleteConnector must not be called
+
+		r, _ := runScenario(t, conn, avn, newConnectorSecret(), other)
+
+		got := &v1alpha1.KafkaConnector{}
+		err := r.Get(t.Context(), types.NamespacedName{Name: conn.Name, Namespace: conn.Namespace}, got)
+		require.True(t, apierrors.IsNotFound(err))
+	})
+
 	t.Run("Ignores not found on deletion", func(t *testing.T) {
 		conn := newKafkaConnector(t)
 		conn.Generation = 1

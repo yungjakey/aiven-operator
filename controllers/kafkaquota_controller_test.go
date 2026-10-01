@@ -312,6 +312,26 @@ func TestKafkaQuotaReconciler(t *testing.T) {
 		require.Equal(t, "true", got.Annotations[instanceIsRunningAnnotation])
 	})
 
+	t.Run("Keeps the quota on deletion while another KafkaQuota manages it", func(t *testing.T) {
+		quota := newObjectFromYAML[v1alpha1.KafkaQuota](t, yamlKafkaQuota)
+		quota.Generation = 1
+		quota.Finalizers = []string{instanceDeletionFinalizer}
+		now := metav1.Now()
+		quota.DeletionTimestamp = &now
+
+		other := newObjectFromYAML[v1alpha1.KafkaQuota](t, yamlKafkaQuota)
+		other.Name = "other"
+
+		avn := avngen.NewMockClient(t) // ServiceKafkaQuotaDelete must not be called
+
+		r, _, err := runKafkaQuotaScenario(t, quota, avn, other)
+		require.NoError(t, err)
+
+		got := &v1alpha1.KafkaQuota{}
+		err = r.Get(t.Context(), types.NamespacedName{Name: quota.Name, Namespace: quota.Namespace}, got)
+		require.True(t, apierrors.IsNotFound(err))
+	})
+
 	t.Run("Deletes KafkaQuota and removes finalizer on deletion", func(t *testing.T) {
 		quota := newObjectFromYAML[v1alpha1.KafkaQuota](t, yamlKafkaQuota)
 		quota.Generation = 1

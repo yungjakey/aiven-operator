@@ -84,6 +84,16 @@ func (r *ClickhouseDatabaseController) Update(_ context.Context, _ *v1alpha1.Cli
 }
 
 func (r *ClickhouseDatabaseController) Delete(ctx context.Context, db *v1alpha1.ClickhouseDatabase) error {
+	var list v1alpha1.ClickhouseDatabaseList
+	if err := r.List(ctx, &list); err != nil {
+		return fmt.Errorf("listing ClickhouseDatabase resources: %w", err)
+	}
+	if err := errIfEntryShared(list.Items, db, func(o *v1alpha1.ClickhouseDatabase) bool {
+		return o.Spec.Project == db.Spec.Project && o.Spec.ServiceName == db.Spec.ServiceName && o.GetDatabaseName() == db.GetDatabaseName()
+	}); err != nil {
+		return err
+	}
+
 	err := r.avnGen.ServiceClickHouseDatabaseDelete(ctx, db.Spec.Project, db.Spec.ServiceName, db.GetDatabaseName())
 	if err != nil && !isNotFound(err) {
 		return err

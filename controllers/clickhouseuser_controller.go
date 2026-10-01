@@ -163,6 +163,16 @@ func (r *ClickhouseUserController) Delete(ctx context.Context, user *v1alpha1.Cl
 		return nil
 	}
 
+	var list v1alpha1.ClickhouseUserList
+	if err := r.List(ctx, &list); err != nil {
+		return fmt.Errorf("listing ClickhouseUser resources: %w", err)
+	}
+	if err := errIfEntryShared(list.Items, user, func(o *v1alpha1.ClickhouseUser) bool {
+		return o.Spec.Project == user.Spec.Project && o.Spec.ServiceName == user.Spec.ServiceName && o.Status.UUID == user.Status.UUID
+	}); err != nil {
+		return err
+	}
+
 	err := r.avnGen.ServiceClickHouseUserDelete(ctx, user.Spec.Project, user.Spec.ServiceName, user.Status.UUID)
 	if err != nil && !isNotFound(err) {
 		return fmt.Errorf("deleting Clickhouse user: %w", err)

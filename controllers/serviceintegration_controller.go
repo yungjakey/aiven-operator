@@ -189,6 +189,16 @@ func (r *ServiceIntegrationController) Delete(ctx context.Context, si *v1alpha1.
 		return nil
 	}
 
+	var list v1alpha1.ServiceIntegrationList
+	if err := r.List(ctx, &list); err != nil {
+		return fmt.Errorf("listing ServiceIntegration resources: %w", err)
+	}
+	if err := errIfEntryShared(list.Items, si, func(o *v1alpha1.ServiceIntegration) bool {
+		return o.Spec.Project == si.Spec.Project && o.Status.ID == si.Status.ID
+	}); err != nil {
+		return err
+	}
+
 	err := r.avnGen.ServiceIntegrationDelete(ctx, si.Spec.Project, si.Status.ID)
 	if err != nil && !isNotFound(err) {
 		return fmt.Errorf("deleting service integration: %w", err)

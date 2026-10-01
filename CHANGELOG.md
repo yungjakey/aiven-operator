@@ -2,6 +2,12 @@
 
 ## [MAJOR.MINOR.PATCH] - YYYY-MM-DD
 
+- Fix deleting a resource that shares its Aiven object with another resource, e.g. two `KafkaTopic`s
+  naming the same topic or two identical ACLs: the object is now kept while another resource still
+  manages it, instead of being deleted under the other one
+- Fix `KafkaACL` keeping the previous ACL when a spec change matches an existing ACL, and
+  `KafkaNativeACL`/`KafkaSchemaRegistryACL` switching to a duplicate entry instead of their own
+
 ## v0.48.0 - 2026-10-01
 
 - **BREAKING**: `ServiceUser` now applies `spec.authentication` when creating Aiven users and

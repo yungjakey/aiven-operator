@@ -44,25 +44,29 @@ func (r *KafkaNativeACLController) Observe(ctx context.Context, acl *v1alpha1.Ka
 		return Observation{}, fmt.Errorf("list Kafka-native ACLs error: %w", err)
 	}
 
-	for _, existing := range list.KafkaAcl {
-		if !nativeSpecMatches(acl.Spec, existing) {
-			continue
+	// Prefer the entry this CR owns over an identical one, e.g. created by another CR.
+	var existing *kafka.KafkaAclOut
+	for i, a := range list.KafkaAcl {
+		if nativeSpecMatches(acl.Spec, a) && (existing == nil || a.Id == acl.Status.ID) {
+			existing = &list.KafkaAcl[i]
 		}
-
-		if acl.Status.ID != existing.Id {
-			// Adopting an entry this CR did not create.
-			logr.FromContextOrDiscard(ctx).Info("adopting existing Kafka-native ACL",
-				"aclID", existing.Id, "cachedID", acl.Status.ID)
-			acl.Status.ID = existing.Id
-		}
-
-		markInstanceRunning(acl)
-
-		// The spec is immutable, so an existing ACL is always up to date.
-		return Observation{ResourceExists: true, ResourceUpToDate: true}, nil
 	}
 
-	return Observation{ResourceExists: false}, nil
+	if existing == nil {
+		return Observation{ResourceExists: false}, nil
+	}
+
+	if acl.Status.ID != existing.Id {
+		// Adopting an entry this CR did not create.
+		logr.FromContextOrDiscard(ctx).Info("adopting existing Kafka-native ACL",
+			"aclID", existing.Id, "cachedID", acl.Status.ID)
+		acl.Status.ID = existing.Id
+	}
+
+	markInstanceRunning(acl)
+
+	// The spec is immutable, so an existing ACL is always up to date.
+	return Observation{ResourceExists: true, ResourceUpToDate: true}, nil
 }
 
 func (r *KafkaNativeACLController) Create(ctx context.Context, acl *v1alpha1.KafkaNativeACL) (CreateResult, error) {
@@ -98,6 +102,16 @@ func (r *KafkaNativeACLController) Update(_ context.Context, acl *v1alpha1.Kafka
 func (r *KafkaNativeACLController) Delete(ctx context.Context, acl *v1alpha1.KafkaNativeACL) error {
 	if acl.Status.ID == "" {
 		return nil
+	}
+
+	var list v1alpha1.KafkaNativeACLList
+	if err := r.List(ctx, &list); err != nil {
+		return fmt.Errorf("listing KafkaNativeACL resources: %w", err)
+	}
+	if err := errIfEntryShared(list.Items, acl, func(o *v1alpha1.KafkaNativeACL) bool {
+		return o.Spec.Project == acl.Spec.Project && o.Spec.ServiceName == acl.Spec.ServiceName && o.Status.ID == acl.Status.ID
+	}); err != nil {
+		return err
 	}
 
 	err := r.avnGen.ServiceKafkaNativeAclDelete(ctx, acl.Spec.Project, acl.Spec.ServiceName, acl.Status.ID)
