@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	avngen "github.com/aiven/go-client-codegen"
@@ -130,6 +131,12 @@ func (h *genericServiceHandler) createOrUpdate(ctx context.Context, avnGen avnge
 		if err != nil {
 			return fmt.Errorf("failed to create service: %w", err)
 		}
+
+		if !fromAnyPointer(spec.Powered) {
+			// Services are created powered on. Leave the generation unprocessed, so the next pass
+			// powers it off, once checkPreconditions sees a backup.
+			return ErrRequeueNeeded{OriginalError: errors.New("service is created powered on, powering off once it has a backup")}
+		}
 	} else {
 		userConfig, err := UpdateUserConfiguration(userCfg)
 		if err != nil {
@@ -251,7 +258,8 @@ func (h *genericServiceHandler) observe(ctx context.Context, avnGen avngen.Clien
 			o.getServiceStatus().Conditions,
 			v1alpha1.ConditionTypeMigrationComplete,
 		)
-		if !migrationDone {
+		// A powered-off service has no active migration, a 404 there says nothing about completion.
+		if !migrationDone && isPowered {
 			if err := h.updateMigrationStatus(ctx, avnGen, o, spec); err != nil {
 				return err
 			}
@@ -423,11 +431,16 @@ func (h *genericServiceHandler) checkPreconditions(ctx context.Context, avnGen a
 	}
 
 	switch o.getServiceType() {
-	case serviceTypeKafkaConnect:
+	case serviceTypeKafkaConnect, serviceTypeKafka:
+		// Kafka can be powered off without backups, it loses the topic data.
 	default:
 		// Power-off not allowed without an initial backup.
 		if !fromAnyPointer(spec.Powered) {
 			list, err := avnGen.ServiceBackupsGet(ctx, spec.Project, o.getObjectMeta().Name)
+			if isNotFound(err) {
+				// Not created yet: services are created powered on, whatever the spec says.
+				return true, nil
+			}
 			if err != nil {
 				return false, err
 			}

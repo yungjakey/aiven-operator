@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"errors"
 	"net/http"
 	"testing"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"github.com/aiven/aiven-operator/api/v1alpha1"
@@ -339,6 +341,36 @@ func TestGet_SecretCleanupRunsWhenPoweredOff(t *testing.T) {
 		"migration Secret should have been deleted even though service is powered off, got err: %v", err)
 }
 
+func TestObserve_DoesNotCompleteMigrationWhilePoweredOff(t *testing.T) {
+	t.Parallel()
+
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "creds", Namespace: "default"},
+		Data:       map[string][]byte{"host": []byte("x")},
+	}
+	k8s := fake.NewClientBuilder().WithScheme(scheme).WithObjects(secret).Build()
+
+	pg := newObjectFromYAML[v1alpha1.PostgreSQL](t, yamlPostgres)
+	pg.Namespace = "default"
+	pg.Spec.Powered = new(false)
+	pg.Spec.MigrationSecretSource = &v1alpha1.MigrationSecretSource{Name: "creds", DeleteAfterMigration: true}
+
+	avn := avngen.NewMockClient(t)
+	avn.EXPECT().
+		ServiceGet(mock.Anything, pg.Spec.Project, pg.Name, mock.Anything).
+		Return(&service.ServiceGetOut{State: service.ServiceStateTypePoweroff}, nil).Once()
+	// ServiceGetMigrationStatus would 404 on a powered-off service, which isn't a completed migration.
+
+	h := &genericServiceHandler{fabric: newPostgreSQLAdapterFactory(k8s), log: logr.Discard(), k8s: k8s}
+	require.NoError(t, h.observe(t.Context(), avn, pg))
+
+	require.False(t, meta.IsStatusConditionTrue(pg.Status.Conditions, v1alpha1.ConditionTypeMigrationComplete))
+	require.NoError(t, k8s.Get(t.Context(), types.NamespacedName{Name: "creds", Namespace: "default"}, &corev1.Secret{}))
+}
+
 func TestObserve_EmitsEventWhenConnectionSecretCreationDisabled(t *testing.T) {
 	t.Parallel()
 
@@ -557,4 +589,69 @@ func TestServiceVersion(t *testing.T) {
 	assert.Empty(t, serviceVersion(serviceTypePostgreSQL, metadata))
 	assert.Empty(t, serviceVersion(serviceTypeKafkaConnect, metadata))
 	assert.Empty(t, serviceVersion(serviceTypeValkey, nil))
+}
+
+func TestCheckPreconditionsPoweredOff(t *testing.T) {
+	t.Parallel()
+
+	powerOff := func(o client.Object) client.Object {
+		switch v := o.(type) {
+		case *v1alpha1.PostgreSQL:
+			v.Spec.Powered = new(false)
+		case *v1alpha1.Kafka:
+			v.Spec.Powered = new(false)
+		}
+		return o
+	}
+
+	t.Run("Allows creating a service declared powered off", func(t *testing.T) {
+		t.Parallel()
+
+		pg := powerOff(newObjectFromYAML[v1alpha1.PostgreSQL](t, yamlPostgres)).(*v1alpha1.PostgreSQL)
+		avn := avngen.NewMockClient(t)
+		avn.EXPECT().
+			ServiceBackupsGet(mock.Anything, pg.Spec.Project, pg.Name).
+			Return(nil, avngen.Error{Status: http.StatusNotFound, Message: "Service not found"}).Once()
+
+		h := &genericServiceHandler{fabric: newPostgreSQLAdapterFactory(nil), log: logr.Discard()}
+		ok, err := h.checkPreconditions(t.Context(), avn, pg)
+		require.NoError(t, err)
+		require.True(t, ok)
+	})
+
+	t.Run("Allows powering off Kafka without backups", func(t *testing.T) {
+		t.Parallel()
+
+		kafka := &v1alpha1.Kafka{}
+		kafka.Name = "kafka"
+		kafka.Spec.Project = "test-project"
+		powerOff(kafka)
+
+		h := &genericServiceHandler{fabric: newKafkaAdapter, log: logr.Discard()}
+		ok, err := h.checkPreconditions(t.Context(), avngen.NewMockClient(t), kafka)
+		require.NoError(t, err)
+		require.True(t, ok)
+	})
+}
+
+func TestCreateOrUpdatePowersOffAServiceCreatedPoweredOff(t *testing.T) {
+	t.Parallel()
+
+	pg := newObjectFromYAML[v1alpha1.PostgreSQL](t, yamlPostgres)
+	pg.Spec.Powered = new(false)
+
+	avn := avngen.NewMockClient(t)
+	avn.EXPECT().
+		ServiceGet(mock.Anything, pg.Spec.Project, pg.Name).
+		Return(nil, avngen.Error{Status: http.StatusNotFound, Message: "Service not found"}).Once()
+	avn.EXPECT().
+		ServiceCreate(mock.Anything, pg.Spec.Project, mock.Anything).
+		Return(&service.ServiceCreateOut{}, nil).Once()
+
+	h := &genericServiceHandler{fabric: newPostgreSQLAdapterFactory(nil), log: logr.Discard()}
+	err := h.createOrUpdate(t.Context(), avn, pg, nil)
+
+	// The generation must stay unprocessed, otherwise the service is never powered off.
+	_, requeue := errors.AsType[ErrRequeueNeeded](err)
+	require.True(t, requeue, "got %v", err)
 }
