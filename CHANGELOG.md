@@ -2,6 +2,10 @@
 
 ## [MAJOR.MINOR.PATCH] - YYYY-MM-DD
 
+- Fix `KafkaConnector`: `userConfig` can no longer override `name` or `connector.class`, the resource
+  stops reporting ready when the connector leaves RUNNING, and values read via `fromSecret` are
+  pushed again when the secret changes
+
 ## v0.48.0 - 2026-10-01
 
 - **BREAKING**: `ServiceUser` now applies `spec.authentication` when creating Aiven users and

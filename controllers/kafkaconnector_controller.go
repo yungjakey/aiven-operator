@@ -5,6 +5,9 @@ package controllers
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"text/template"
@@ -22,6 +25,10 @@ import (
 
 // errSecretFetch returned when unable to fetch the secret, that is described in the connector UserConfig value.
 var errSecretFetch = errors.New("unable to fetch secret")
+
+// kafkaConnectorAppliedConfigAnnotation holds a fingerprint of the last applied config, including
+// values read from secrets, so a rotated secret gets pushed without a spec change.
+const kafkaConnectorAppliedConfigAnnotation = "controllers.aiven.io/kafka-connector-applied-config"
 
 //+kubebuilder:rbac:groups=aiven.io,resources=kafkaconnectors,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=aiven.io,resources=kafkaconnectors/status,verbs=get;update;patch
@@ -49,7 +56,8 @@ func (r *KafkaConnectorController) Observe(ctx context.Context, conn *v1alpha1.K
 	}
 
 	// A missing secret (errSecretFetch) is a transient precondition error.
-	if _, err := r.buildConnectorConfig(ctx, conn); err != nil {
+	cfg, err := r.buildConnectorConfig(ctx, conn)
+	if err != nil {
 		if errors.Is(err, errSecretFetch) {
 			return Observation{}, fmt.Errorf("%w: %w", errPreconditionNotMet, err)
 		}
@@ -101,12 +109,30 @@ func (r *KafkaConnectorController) Observe(ctx context.Context, conn *v1alpha1.K
 	// Mark running only when the connector is actually RUNNING on Aiven side.
 	if connStat.State == kafkaconnect.ServiceKafkaConnectConnectorStateTypeRunning {
 		markInstanceRunning(conn)
+	} else if hasIsRunningAnnotation(conn) {
+		// Dependants must stop trusting a connector that left RUNNING, e.g. FAILED or PAUSED.
+		delete(conn.GetAnnotations(), instanceIsRunningAnnotation)
+		meta.SetStatusCondition(&conn.Status.Conditions, getRunningCondition(metav1.ConditionFalse, "CheckRunning",
+			fmt.Sprintf("Connector is %s on Aiven side", connStat.State)))
+	}
+
+	// Connectors applied before the fingerprint existed are backfilled rather than edited,
+	// an edit restarts the connector.
+	applied, ok := conn.GetAnnotations()[kafkaConnectorAppliedConfigAnnotation]
+	if !ok {
+		metav1.SetMetaDataAnnotation(&conn.ObjectMeta, kafkaConnectorAppliedConfigAnnotation, fingerprintConnectorConfig(cfg))
 	}
 
 	return Observation{
 		ResourceExists:   true,
-		ResourceUpToDate: hasLatestGeneration(conn),
+		ResourceUpToDate: hasLatestGeneration(conn) && (!ok || applied == fingerprintConnectorConfig(cfg)),
 	}, nil
+}
+
+func fingerprintConnectorConfig(cfg map[string]string) string {
+	buf, _ := json.Marshal(cfg) // map keys are sorted
+	sum := sha256.Sum256(buf)
+	return hex.EncodeToString(sum[:])
 }
 
 func (r *KafkaConnectorController) Create(ctx context.Context, conn *v1alpha1.KafkaConnector) (CreateResult, error) {
@@ -125,6 +151,7 @@ func (r *KafkaConnectorController) Create(ctx context.Context, conn *v1alpha1.Ka
 	case err != nil:
 		return CreateResult{}, fmt.Errorf("cannot create kafka connector on Aiven side: %w", err)
 	}
+	metav1.SetMetaDataAnnotation(&conn.ObjectMeta, kafkaConnectorAppliedConfigAnnotation, fingerprintConnectorConfig(connCfg))
 
 	const reason = "Created"
 	meta.SetStatusCondition(&conn.Status.Conditions, getInitializedCondition(reason, "Successfully created the instance in Aiven"))
@@ -149,6 +176,7 @@ func (r *KafkaConnectorController) Update(ctx context.Context, conn *v1alpha1.Ka
 	case err != nil:
 		return UpdateResult{}, fmt.Errorf("cannot update kafka connector on Aiven side: %w", err)
 	}
+	metav1.SetMetaDataAnnotation(&conn.ObjectMeta, kafkaConnectorAppliedConfigAnnotation, fingerprintConnectorConfig(connCfg))
 
 	const reason = "Updated"
 	meta.SetStatusCondition(&conn.Status.Conditions, getInitializedCondition(reason, "Successfully updated the instance in Aiven"))
@@ -191,10 +219,6 @@ func (r *KafkaConnectorController) buildConnectorConfig(ctx context.Context, con
 	)
 
 	m := make(map[string]string)
-
-	m[configFieldConnectorName] = conn.GetName()
-	m[configFieldConnectorClass] = conn.Spec.ConnectorClass
-
 	for k, v := range conn.Spec.UserConfig {
 		t, err := template.New(k).Funcs(funcMap).Parse(v)
 		if err != nil {
@@ -206,6 +230,10 @@ func (r *KafkaConnectorController) buildConnectorConfig(ctx context.Context, con
 		}
 		m[k] = templateRes.String()
 	}
+
+	// Set last, so userConfig can't rename the connector away from the one this resource tracks.
+	m[configFieldConnectorName] = conn.GetName()
+	m[configFieldConnectorClass] = conn.Spec.ConnectorClass
 	return m, nil
 }
 
