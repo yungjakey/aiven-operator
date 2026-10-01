@@ -183,15 +183,19 @@ func (a *postgreSQLAdapter) getDiskSpace() string {
 //     task result, preventing the upgrade attempt.
 //  4. Once the check passes, ServiceUpdate can proceed. The actual upgrade happens async after ServiceUpdate.
 func (a *postgreSQLAdapter) performUpgradeTaskIfNeeded(ctx context.Context, avnGen avngen.Client, old *service.ServiceGetOut) error {
-	currentVersion := old.UserConfig["pg_version"].(string)
+	currentVersion, _ := old.UserConfig["pg_version"].(string)
+	if currentVersion == "" {
+		// A service created without pg_version doesn't echo it in user_config.
+		currentVersion = serviceVersion(serviceTypePostgreSQL, old.Metadata)
+	}
 	targetUserConfig := a.getUserConfig().(*pguserconfig.PgUserConfig)
 	if targetUserConfig == nil || targetUserConfig.PgVersion == nil {
 		return nil
 	}
 	targetVersion := *targetUserConfig.PgVersion
 
-	// No need to upgrade if pg_version hasn't changed
-	if targetVersion == currentVersion {
+	// No need to upgrade if pg_version hasn't changed, or can't be compared
+	if targetVersion == currentVersion || currentVersion == "" {
 		return nil
 	}
 
@@ -226,7 +230,7 @@ func (a *postgreSQLAdapter) performUpgradeTaskIfNeeded(ctx context.Context, avnG
 					"PG service upgrade check error, version upgrade from %s to %s, result: %s",
 					currentVersion,
 					targetVersion,
-					task.Result,
+					t.Result,
 				)
 			}
 
