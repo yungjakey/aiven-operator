@@ -213,8 +213,9 @@ func TestClickhouseGrantController_Create(t *testing.T) {
 
 		_, err := ctrl.Create(t.Context(), grant)
 		require.ErrorIs(t, err, assert.AnError)
-		// State must not advance when granting fails.
-		require.Nil(t, grant.Status.State)
+		// Some statements may have succeeded, so the state must cover the whole spec to revoke them later.
+		require.NotNil(t, grant.Status.State)
+		require.Equal(t, grant.Spec.Grants, *grant.Status.State)
 		// The resource must not keep advertising itself as running after a failed apply.
 		require.NotContains(t, grant.Annotations, instanceIsRunningAnnotation)
 	})
@@ -280,6 +281,29 @@ func TestClickhouseGrantController_Delete(t *testing.T) {
 		for _, stmt := range router.executed {
 			require.True(t, strings.HasPrefix(stmt, "REVOKE "), "expected only REVOKE statements, got %q", stmt)
 		}
+	})
+
+	t.Run("Revokes the applied state when the spec has changed since", func(t *testing.T) {
+		grant := newObjectFromYAML[v1alpha1.ClickhouseGrant](t, yamlClickhouseGrant)
+		grant.Status.State = &v1alpha1.Grants{
+			PrivilegeGrants: []v1alpha1.PrivilegeGrant{{
+				Grantees:   []v1alpha1.Grantee{{User: "test-user"}},
+				Privileges: []string{"SELECT"},
+				Database:   "old-db",
+			}},
+		}
+
+		router := &chQueryRouter{}
+
+		avn := avngen.NewMockClient(t)
+		avn.EXPECT().
+			ServiceClickHouseQuery(mock.Anything, grant.Spec.Project, grant.Spec.ServiceName, mock.Anything).
+			RunAndReturn(router.handle)
+
+		ctrl := &ClickhouseGrantController{avnGen: avn}
+
+		require.NoError(t, ctrl.Delete(t.Context(), grant))
+		require.Contains(t, router.executed, "REVOKE SELECT ON `old-db`.* FROM `test-user` ")
 	})
 
 	t.Run("Tolerates 400 and 404 errors during revoke", func(t *testing.T) {

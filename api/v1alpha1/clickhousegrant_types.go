@@ -184,7 +184,7 @@ func (g *PrivilegeGrant) ConstructParts(t chUtils.StatementType) (string, string
 func constructPrivilegesPart(g *PrivilegeGrant) string {
 	privileges := make([]string, 0, len(g.Privileges))
 	for _, privilege := range g.Privileges {
-		if (privilege == "SELECT" || privilege == "INSERT") && len(g.Columns) > 0 {
+		if (strings.EqualFold(privilege, "SELECT") || strings.EqualFold(privilege, "INSERT")) && len(g.Columns) > 0 {
 			columnList := strings.Join(utils.MapSlice(g.Columns, escape), ", ")
 			privileges = append(privileges, fmt.Sprintf("%s(%s)", privilege, columnList))
 		} else {

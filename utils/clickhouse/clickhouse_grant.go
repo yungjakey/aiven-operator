@@ -31,7 +31,7 @@ var (
 	queryNonAivenUsers      = fmt.Sprintf("SELECT name FROM system.users WHERE name NOT IN('%s')", strings.Join(InternalAivenRoles, "', '"))
 
 	internalDatabases = []string{"default", "INFORMATION_SCHEMA", "information_schema", "system"}
-	queryAllDatabases = fmt.Sprintf("SELECT name FROM system.databases WHERE name NOT IN('%s')", strings.Join(internalDatabases, "', '"))
+	queryAllDatabases = "SELECT name FROM system.databases"
 	queryAllTables    = fmt.Sprintf("SELECT database, name FROM system.tables WHERE database NOT IN('%s')", strings.Join(internalDatabases, "', '"))
 )
 
