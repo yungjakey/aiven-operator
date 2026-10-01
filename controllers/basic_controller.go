@@ -232,7 +232,7 @@ func (i *instanceReconcilerHelper) reconcile(ctx context.Context, o v1alpha1.Aiv
 		// while the original object must already have all the fields updated in runtime
 		// Additionally, it gets the "latest version" to resolve optimistic concurrency control conflict
 		latest := o.DeepCopyObject().(client.Object)
-		err = i.k8s.Get(ctx, types.NamespacedName{
+		err := i.k8s.Get(ctx, types.NamespacedName{
 			Name:      latest.GetName(),
 			Namespace: latest.GetNamespace(),
 		}, latest)
@@ -240,10 +240,30 @@ func (i *instanceReconcilerHelper) reconcile(ctx context.Context, o v1alpha1.Aiv
 			return err
 		}
 
-		updated := o.DeepCopyObject().(client.Object)
-		updated.SetResourceVersion(latest.GetResourceVersion())
-		err := i.k8s.Update(ctx, updated)
-		if err != nil {
+		// Apply only the metadata changed by this reconcile onto the latest object,
+		// so that spec and metadata edits made meanwhile are kept.
+		updated := latest.DeepCopyObject().(client.Object)
+		annotations := updated.GetAnnotations()
+		if annotations == nil {
+			annotations = map[string]string{}
+		}
+		for k, v := range orig.GetAnnotations() {
+			if cur, ok := o.GetAnnotations()[k]; !ok {
+				delete(annotations, k)
+			} else if cur != v {
+				annotations[k] = cur
+			}
+		}
+		for k, v := range o.GetAnnotations() {
+			if _, ok := orig.GetAnnotations()[k]; !ok {
+				annotations[k] = v
+			}
+		}
+		updated.SetAnnotations(annotations)
+		if controllerutil.ContainsFinalizer(o, instanceDeletionFinalizer) {
+			controllerutil.AddFinalizer(updated, instanceDeletionFinalizer)
+		}
+		if err := i.k8s.Update(ctx, updated); err != nil {
 			return err
 		}
 
@@ -271,9 +291,11 @@ func (i *instanceReconcilerHelper) reconcileInstance(ctx context.Context, o v1al
 	}
 
 	if !controllerutil.ContainsFinalizer(o, instanceDeletionFinalizer) {
-		// Adds finalizer. The commit is performed in the outer function
+		// Persisted before anything is created at Aiven, so a quick delete can't orphan the service.
 		i.log.Info("adding finalizer to instance")
-		controllerutil.AddFinalizer(o, instanceDeletionFinalizer)
+		if err := addFinalizer(ctx, i.k8s, o, instanceDeletionFinalizer); err != nil {
+			return false, fmt.Errorf("unable to add finalizer to instance: %w", err)
+		}
 		i.rec.Event(o, corev1.EventTypeNormal, eventAddedFinalizer, "instance finalizer added")
 	}
 
@@ -518,13 +540,7 @@ func (i *instanceReconcilerHelper) createOrUpdateInstance(ctx context.Context, o
 
 	// API errors are retrayable.
 	if isServerError(err) {
-		i.log.Info(
-			"unable to create or update %s: %s/%s, retrying: %s",
-			o.GetObjectKind().GroupVersionKind().Kind,
-			o.GetNamespace(),
-			o.GetName(),
-			err,
-		)
+		i.log.Info("unable to create or update instance, retrying", "error", err.Error())
 		return true, nil
 	}
 

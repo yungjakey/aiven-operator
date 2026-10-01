@@ -2,6 +2,9 @@
 
 ## [MAJOR.MINOR.PATCH] - YYYY-MM-DD
 
+- Fix service kinds losing reconcile errors, reverting spec edits made during a reconcile, and
+  creating the service at Aiven before the deletion finalizer is saved
+
 ## v0.48.0 - 2026-10-01
 
 - **BREAKING**: `ServiceUser` now applies `spec.authentication` when creating Aiven users and
