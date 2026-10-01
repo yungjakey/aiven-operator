@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -136,7 +137,7 @@ func (r *KafkaSchemaController) Observe(ctx context.Context, schema *v1alpha1.Ka
 		return Observation{}, err
 	}
 
-	_, err := r.avnGen.ServiceSchemaRegistrySubjectVersionsGet(
+	versions, err := r.avnGen.ServiceSchemaRegistrySubjectVersionsGet(
 		ctx,
 		schema.Spec.Project,
 		schema.Spec.ServiceName,
@@ -176,6 +177,11 @@ func (r *KafkaSchemaController) Observe(ctx context.Context, schema *v1alpha1.Ka
 	}
 
 	if !ok || appliedFP != desiredFP {
+		return Observation{ResourceExists: true, ResourceUpToDate: false}, nil
+	}
+
+	// The applied version was deleted outside the operator, dependants would reference a missing version.
+	if schema.Status.Version != 0 && !slices.Contains(versions, schema.Status.Version) {
 		return Observation{ResourceExists: true, ResourceUpToDate: false}, nil
 	}
 

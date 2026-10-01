@@ -235,6 +235,44 @@ func TestKafkaSchemaReconciler(t *testing.T) {
 			"Observe must not clobber Status.Version with the registry's max")
 	})
 
+	t.Run("Re-registers KafkaSchema when its version was deleted outside the operator", func(t *testing.T) {
+		schema := newObjectFromYAML[v1alpha1.KafkaSchema](t, yamlKafkaSchema)
+		schema.Generation = 1
+		schema.Annotations = map[string]string{
+			processedGenerationAnnotation:           "1",
+			instanceIsRunningAnnotation:             "true",
+			kafkaSchemaAppliedFingerprintAnnotation: fingerprintSchema(schema, nil),
+		}
+		schema.Status.ID = 42
+		schema.Status.Version = 2
+
+		avn := avngen.NewMockClient(t)
+		avn.EXPECT().
+			ServiceGet(mock.Anything, schema.Spec.Project, schema.Spec.ServiceName, mock.Anything).
+			Return(runningService(), nil).Once()
+		// Version 2 was soft-deleted, the subject lives on with another version.
+		avn.EXPECT().
+			ServiceSchemaRegistrySubjectVersionsGet(mock.Anything, schema.Spec.Project, schema.Spec.ServiceName, schema.Spec.SubjectName).
+			Return([]int{1}, nil).Once()
+		avn.EXPECT().
+			ServiceSchemaRegistrySubjectVersionPost(
+				mock.Anything, schema.Spec.Project, schema.Spec.ServiceName, schema.Spec.SubjectName, mock.Anything,
+			).Return(42, nil).Once()
+		avn.EXPECT().
+			ServiceSchemaRegistrySubjectVersionsGet(mock.Anything, schema.Spec.Project, schema.Spec.ServiceName, schema.Spec.SubjectName).
+			Return([]int{1, 3}, nil).Once()
+		avn.EXPECT().
+			ServiceSchemaRegistrySubjectVersionGet(mock.Anything, schema.Spec.Project, schema.Spec.ServiceName, schema.Spec.SubjectName, 3).
+			Return(&kafkaschemaregistry.ServiceSchemaRegistrySubjectVersionGetOut{Id: 42, Version: 3}, nil).Once()
+
+		r, _, err := runKafkaSchemaScenario(t, schema, avn)
+		require.NoError(t, err)
+
+		got := &v1alpha1.KafkaSchema{}
+		require.NoError(t, r.Get(t.Context(), types.NamespacedName{Name: schema.Name, Namespace: schema.Namespace}, got))
+		require.Equal(t, 3, got.Status.Version)
+	})
+
 	t.Run("Updates KafkaSchema when fingerprint disagrees with spec", func(t *testing.T) {
 		schema := newObjectFromYAML[v1alpha1.KafkaSchema](t, yamlKafkaSchema)
 		schema.Generation = 2
