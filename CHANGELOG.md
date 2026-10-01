@@ -2,6 +2,17 @@
 
 ## [MAJOR.MINOR.PATCH] - YYYY-MM-DD
 
+- Fix `KafkaTopic` never detecting drift: `partitions`, `replication`, `tags` and the
+  configuration keys the topic list reports are now compared against the spec, so a topic changed
+  outside the operator is brought back in line instead of being reported as up to date.
+  Configuration keys outside that set are still applied without being checked
+- Fix `KafkaTopic` attempting to create topics on a powered-off service, or on one that reports no
+  nodes, which surfaced as a hard error and exponential backoff instead of a quiet requeue
+- Fix `KafkaTopic` staying marked as running after the topic leaves the `ACTIVE` state, which kept
+  `IsReadyToUse` true and released resources waiting on it
+- Fix `KafkaTopic` reconciles failing with `context canceled` when another topic in the same Kafka
+  service had its reconcile cancelled while they shared a topic-list call
+
 ## v0.48.0 - 2026-10-01
 
 - **BREAKING**: `ServiceUser` now applies `spec.authentication` when creating Aiven users and
