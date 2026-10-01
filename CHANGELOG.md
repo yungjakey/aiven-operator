@@ -2,6 +2,15 @@
 
 ## [MAJOR.MINOR.PATCH] - YYYY-MM-DD
 
+- Fix immutability not being enforced on optional `KafkaTopic` `topicName`, `KafkaQuota` `user` and
+  `clientId`, and `KafkaSchema` `schemaType`. A transition rule on an optional field is skipped
+  whenever the field is absent, so adding or removing one of these was accepted and silently
+  repointed the resource at a different topic, quota or schema type. Adding and removing the
+  field is now rejected as well as changing it. Existing resources are unaffected until their
+  next update
+- Fix `KafkaSchema` rejecting `references` with an opaque `no such key: schemaType` error when
+  `schemaType` was not set; the validation message now explains what is wrong
+
 ## v0.48.0 - 2026-10-01
 
 - **BREAKING**: `ServiceUser` now applies `spec.authentication` when creating Aiven users and
