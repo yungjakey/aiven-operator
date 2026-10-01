@@ -259,6 +259,34 @@ func TestProjectVPCReconciler(t *testing.T) {
 		require.Equal(t, "1", got.Annotations[processedGenerationAnnotation])
 	})
 
+	t.Run("Stops reporting ready when the VPC is deleted outside the operator", func(t *testing.T) {
+		vpcObj := newProjectVPC(t)
+		vpcObj.Generation = 1
+		vpcObj.Status.ID = "vpc-id-1"
+		metav1.SetMetaDataAnnotation(&vpcObj.ObjectMeta, processedGenerationAnnotation, "1")
+		metav1.SetMetaDataAnnotation(&vpcObj.ObjectMeta, instanceIsRunningAnnotation, "true")
+
+		avn := avngen.NewMockClient(t)
+		avn.EXPECT().
+			VpcGet(mock.Anything, vpcObj.Spec.Project, "vpc-id-1").
+			Return(&vpc.VpcGetOut{ProjectVpcId: "vpc-id-1", State: vpc.VpcStateTypeDeleted}, nil).Once()
+		avn.EXPECT().
+			VpcList(mock.Anything, vpcObj.Spec.Project).
+			Return([]vpc.VpcOut{{
+				ProjectVpcId: "vpc-id-1",
+				CloudName:    vpcObj.Spec.CloudName,
+				NetworkCidr:  vpcObj.Spec.NetworkCidr,
+				State:        vpc.VpcStateTypeDeleted,
+			}}, nil).Once()
+
+		r, res := runScenario(t, vpcObj, avn)
+		require.Equal(t, ctrlruntime.Result{RequeueAfter: requeueTimeout}, res)
+
+		got := getVPC(t, r, vpcObj)
+		require.False(t, IsReadyToUse(got))
+		require.Empty(t, got.Status.ID)
+	})
+
 	t.Run("Recreates VPC when VpcGet returns 404 for a non-empty status.ID", func(t *testing.T) {
 		vpcObj := newProjectVPC(t)
 		vpcObj.Generation = 1
